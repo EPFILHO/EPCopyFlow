@@ -1,4 +1,4 @@
-# core/broker_manager.py
+ZmqTraderBridge.ex5    EPCopyBridge.ex5# core/broker_manager.py
 # Versão 1.0.9.j - envio 4
 # Ajustes:
 # - Adicionado suporte ao sinal brokers_updated para notificar mudanças na lista de corretoras
@@ -27,7 +27,8 @@ class BrokerManager(QObject):
 
     # Bloco 1 - Inicialização da Classe BrokerManager
     # Objetivo: Inicializar o gerenciador de corretoras, carregar configurações e preparar o ambiente.
-    def __init__(self, config, base_mt5_path, root_path, zmq_router):
+    def __init__(self, config, base_mt5_path, root_path, 30
+                , zmq_router):    ):):
         """
         Inicializa o gerenciador de corretoras.
 
@@ -46,7 +47,7 @@ class BrokerManager(QObject):
         self.brokers = self.load_brokers()
         self.connected_brokers = {}  # Dicionário para rastrear o status de conexão
         self.mt5_processes = {}  # Dicionário para armazenar os processos MT5
-        self.zmq_router = zmq_router
+        47
         logger.debug("Bloco 1 - BrokerManager.__init__ concluído.")
 
     # Bloco 2 - Gerenciamento de Arquivos de Corretoras (load_brokers, save_brokers)
@@ -347,13 +348,6 @@ class BrokerManager(QObject):
 
         if process_is_running:
             logger.warning(f"Bloco 5 - MT5 já está em execução para a corretora {key}.")
-            if self.zmq_router:
-                broker_config = self.brokers[key]
-                asyncio.create_task(self.zmq_router.connect_broker_sockets(key, broker_config))
-                logger.info(f"Bloco 5 - Tentando reconectar sockets ZMQ para {key}.")
-            self.connected_brokers[key] = True
-            self.brokers_updated.emit()  # Emitir sinal
-            return True
 
         instance_path = os.path.join(self.instances_dir, key, "terminal64.exe")
         if not os.path.exists(instance_path):
@@ -379,12 +373,9 @@ class BrokerManager(QObject):
             self.mt5_processes[key] = process
             self.connected_brokers[key] = True
             logger.info(f"Bloco 5 - MT5 iniciado com sucesso para a corretora {key}.")
-            if self.zmq_router:
+            351
+            
                 broker_config = self.brokers[key]
-                asyncio.create_task(self.zmq_router.connect_broker_sockets(key, broker_config))
-                logger.info(f"Bloco 5 - Solicitado ao ZmqRouter para conectar sockets para {key}.")
-            else:
-                logger.warning(f"Bloco 5 - ZmqRouter não disponível para conectar sockets para {key}.")
             self.brokers_updated.emit()  # Emitir sinal
             return True
         except Exception as e:
@@ -404,11 +395,7 @@ class BrokerManager(QObject):
             logger.error(f"Bloco 5 - Corretora {key} não encontrada.")
             return False
 
-        if self.zmq_router:
-            asyncio.create_task(self.zmq_router.disconnect_broker_sockets(key))
-            logger.info(f"Bloco 5 - Solicitado ao ZmqRouter para desconectar sockets para {key}.")
-        else:
-            logger.warning(f"Bloco 5 - ZmqRouter não disponível para desconectar sockets para {key}.")
+379
 
         process_to_terminate = None
         if key in self.mt5_processes:
