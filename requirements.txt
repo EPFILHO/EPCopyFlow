@@ -1,4 +1,14 @@
+# === Core ZMQ / Async ===
 PySide6>=6.6.0
 qasync>=0.27.1
 pyzmq>=25.1.1
+tornado>=6.1
+
+# === Windows / Sistema ===
 pywin32>=306
+psutil>=5.9.0
+
+# === Dados / Graficos (temporario - remover apos refatoracao) ===
+pandas>=2.0.0
+matplotlib>=3.7.0
+mplfinance>=0.12.10b0
