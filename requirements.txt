@@ -1,0 +1,4 @@
+PySide6>=6.6.0
+qasync>=0.27.1
+pyzmq>=25.1.1
+pywin32>=306
