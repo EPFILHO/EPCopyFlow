@@ -3,6 +3,7 @@ import logging
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QMenuBar
 from PySide6.QtGui import QAction
 from gui.brokers_dialog import BrokersDialog
+from gui.tabs.status_tab import StatusTab 
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,8 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         
-        # Placeholder para a aba de status
-        self.status_tab = QWidget() 
+        # Agora usando a StatusTab real
+        self.status_tab = StatusTab(self.broker_manager, self)
         self.tabs.addTab(self.status_tab, "Monitor de Status")
 
     def _open_brokers_dialog(self):
