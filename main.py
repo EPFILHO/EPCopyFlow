@@ -38,16 +38,9 @@ async def main():
         
         base_mt5 = config.get("General", "base_mt5_path", fallback="C:/Program Files/MetaTrader 5")
         
-        # 2. Inicializar Core (Ordem é importante)
-        # BrokerManager gerencia as instâncias MT5 e o arquivo brokers.json
+        # 2. Inicializar Core
         broker_manager = BrokerManager(config, base_mt5, root_path)
-        
-        # ZmqBridge gerencia os sockets ZMQ com cada instância
-        # Correção: ZmqBridge espera o objeto config
         zmq_bridge = ZmqBridge(config)
-        
-        # CopyEngine contém a inteligência de replicação (Master -> Slaves)
-        # Correção: CopyEngine espera (bridge, config, broker_manager)
         copy_engine = CopyEngine(zmq_bridge, config, broker_manager)
         
         # 3. Inicializar GUI
@@ -55,16 +48,38 @@ async def main():
         window.show()
 
         # Iniciar Bridge (async task)
-        # Correção: start() espera o dicionário de brokers
         bridge_task = asyncio.create_task(zmq_bridge.start(broker_manager.get_brokers()))
 
-        with loop:
-            loop.run_forever()
+        # Aguardar o fechamento da janela para encerrar o loop corretamente
+        # Usando future para sinalizar encerramento
+        close_future = asyncio.Future()
+        app.aboutToQuit.connect(lambda: close_future.set_result(True))
+
+        # Rodar o bridge e aguardar encerramento
+        try:
+            await close_future
+        finally:
+            # Encerramento limpo
+            logger.info("Encerrando aplicação...")
+            await zmq_bridge.stop()
+            copy_engine.stop()
+            bridge_task.cancel()
+            try:
+                await bridge_task
+            except asyncio.CancelledError:
+                pass
+            loop.stop()
             
     except Exception as e:
         logger.critical(f"Erro fatal na inicialização: {e}", exc_info=True)
         sys.exit(1)
 
 if __name__ == "__main__":
-    # Rodar com qasync para integrar event loop do Qt com o do asyncio
-    asyncio.run(main())
+    # O qasync gerencia o loop. Não usamos asyncio.run(main()) direto com qasync.
+    # Em vez disso, deixamos o loop do Qt rodar.
+    app = QApplication(sys.argv)
+    loop = qasync.QEventLoop(app)
+    asyncio.set_event_loop(loop)
+    
+    with loop:
+        loop.run_until_complete(main())
