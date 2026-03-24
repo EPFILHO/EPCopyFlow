@@ -63,14 +63,14 @@ class BrokerManager:
         parser = self._get_parser()
         if parser.has_section('Brokers') and parser.has_option('Brokers', key):
             parser.remove_option('Brokers', key)
-            if hasattr(self.config, 'save_config'):
-                self.config.save_config()
-            else:
-                try:
-                    with open(self.config.config_file, 'w', encoding='utf-8') as f:
-                        parser.write(f)
-                except Exception as e:
-                    logger.error(f'Erro ao salvar config: {e}')
+        if hasattr(self.config, 'save_config'):
+            self.config.save_config()
+        else:
+            try:
+                with open(self.config.config_file, 'w', encoding='utf-8') as f:
+                    parser.write(f)
+            except Exception as e:
+                logger.error(f'Erro ao salvar config: {e}')
 
     # ------------------------------------------------------------------
     # Carregamento
@@ -164,6 +164,7 @@ class BrokerManager:
         """Cria o config.ini dentro da instancia do MT5 para o broker."""
         path = os.path.join(self.instances_dir, key, 'MQL5', 'Files', 'config.ini')
         os.makedirs(os.path.dirname(path), exist_ok=True)
+
         base_port = int(data.get('push_port') or data.get('zmq_port') or 15555)
         nl = chr(10)
         lines = [
@@ -183,6 +184,7 @@ class BrokerManager:
             'Mode=' + str(data.get('mode', 'Hedge')),
             'Type=' + str(data.get('type', 'Demo')),
         ]
+
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(nl.join(lines) + nl)
@@ -198,11 +200,14 @@ class BrokerManager:
         """Inicia o MT5 portavel para o broker indicado."""
         if self.is_connected(key):
             return True
+
         data = self.brokers.get(key, {})
         exe = self.setup_portable_instance(key)
         if not exe:
             return False
+
         self.create_mt5_config(key, data)
+
         try:
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -229,10 +234,21 @@ class BrokerManager:
             except Exception:
                 p.kill()
             del self.mt5_processes[key]
-            self.connected_brokers[key] = False
-            logger.info(f'MT5 encerrado para {key}')
-            return True
-        return False
+
+        self.connected_brokers[key] = False
+        logger.info(f'MT5 encerrado para {key}')
+        return True
+
+    def disconnect_all_brokers(self):
+        """
+        Encerra todos os processos MT5 abertos.
+        Chamado tipicamente no shutdown do aplicativo.
+        """
+        logger.info('Encerrando todos os processos MT5...')
+        keys_to_disconnect = list(self.mt5_processes.keys())  # copia para evitar modificacao durante iteracao
+        for key in keys_to_disconnect:
+            self.disconnect_broker(key)
+        logger.info('Todos os processos MT5 foram encerrados.')
 
     # ------------------------------------------------------------------
     # Consultas
@@ -264,10 +280,13 @@ class BrokerManager:
         if not login:
             logger.error('add_broker: campo login e obrigatorio')
             return False
+
         key = login
         self.brokers[key] = dict(kwargs)
+
         if key not in self.connected_brokers:
             self.connected_brokers[key] = False
+
         self._save_broker_to_config(key, self.brokers[key])
         logger.info(f'Broker adicionado: {key}')
         return True
@@ -280,6 +299,7 @@ class BrokerManager:
         if key not in self.brokers:
             logger.error(f'modify_broker: broker {key} nao encontrado')
             return False
+
         self.brokers[key].update(kwargs)
         self._save_broker_to_config(key, self.brokers[key])
         logger.info(f'Broker modificado: {key}')
@@ -289,6 +309,7 @@ class BrokerManager:
         """Remove um broker (desconecta se necessario) e apaga do config.ini."""
         if self.is_connected(key):
             self.disconnect_broker(key)
+
         self.brokers.pop(key, None)
         self.connected_brokers.pop(key, None)
         self._remove_broker_from_config(key)
