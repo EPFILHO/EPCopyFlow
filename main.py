@@ -8,6 +8,7 @@ import logging
 import asyncio
 import qasync
 from PySide6.QtWidgets import QApplication
+
 from core.config_manager import ConfigManager
 from core.broker_manager import BrokerManager
 from core.zmq_bridge import ZmqBridge
@@ -42,18 +43,20 @@ async def main():
         broker_manager = BrokerManager(config, base_mt5, root_path)
         
         # ZmqBridge gerencia os sockets ZMQ com cada instância
-        zmq_bridge = ZmqBridge(broker_manager)
+        # Correção: ZmqBridge espera o objeto config
+        zmq_bridge = ZmqBridge(config)
         
         # CopyEngine contém a inteligência de replicação (Master -> Slaves)
-        copy_engine = CopyEngine(zmq_bridge, broker_manager)
+        # Correção: CopyEngine espera (bridge, config, broker_manager)
+        copy_engine = CopyEngine(zmq_bridge, config, broker_manager)
         
         # 3. Inicializar GUI
         window = MainWindow(config, broker_manager, zmq_bridge, copy_engine)
         window.show()
 
         # Iniciar Bridge (async task)
-        # Ela fica rodando em background escutando mensagens dos MT5s
-        bridge_task = asyncio.create_task(zmq_bridge.start())
+        # Correção: start() espera o dicionário de brokers
+        bridge_task = asyncio.create_task(zmq_bridge.start(broker_manager.get_brokers()))
 
         with loop:
             loop.run_forever()
