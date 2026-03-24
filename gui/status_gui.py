@@ -257,8 +257,8 @@ class StatusGui(QDialog):
 
             # Nome
             broker_info = self._get_broker_info(key)
-            client = broker_info.get("client", "N/A")
-            self.table.setItem(row, 5, QTableWidgetItem(client))
+            broker_name = broker_info.get("broker_name", "N/A")
+            self.table.setItem(row, 5, QTableWidgetItem(broker_name))
 
             # Tipo
             account_type = broker_info.get("type", "N/A")
