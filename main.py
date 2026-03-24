@@ -26,12 +26,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("EPCopyFlow")
 
-async def main():
+async def run_app(app, loop):
     try:
-        app = QApplication(sys.argv)
-        loop = qasync.QEventLoop(app)
-        asyncio.set_event_loop(loop)
-
         # 1. Carregar Configurações
         root_path = os.path.dirname(os.path.abspath(__file__))
         config = ConfigManager(os.path.join(root_path, "config.ini"))
@@ -50,16 +46,13 @@ async def main():
         # Iniciar Bridge (async task)
         bridge_task = asyncio.create_task(zmq_bridge.start(broker_manager.get_brokers()))
 
-        # Aguardar o fechamento da janela para encerrar o loop corretamente
-        # Usando future para sinalizar encerramento
+        # Aguardar o fechamento da janela
         close_future = asyncio.Future()
         app.aboutToQuit.connect(lambda: close_future.set_result(True))
 
-        # Rodar o bridge e aguardar encerramento
         try:
             await close_future
         finally:
-            # Encerramento limpo
             logger.info("Encerrando aplicação...")
             await zmq_bridge.stop()
             copy_engine.stop()
@@ -68,18 +61,16 @@ async def main():
                 await bridge_task
             except asyncio.CancelledError:
                 pass
-            loop.stop()
             
     except Exception as e:
         logger.critical(f"Erro fatal na inicialização: {e}", exc_info=True)
         sys.exit(1)
 
 if __name__ == "__main__":
-    # O qasync gerencia o loop. Não usamos asyncio.run(main()) direto com qasync.
-    # Em vez disso, deixamos o loop do Qt rodar.
+    # Criação ÚNICA da aplicação e do loop
     app = QApplication(sys.argv)
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
     
     with loop:
-        loop.run_until_complete(main())
+        loop.run_until_complete(run_app(app, loop))
