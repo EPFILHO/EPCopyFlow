@@ -47,7 +47,7 @@ class StatusTab(QWidget):
 
         for i, (key, data) in enumerate(sorted(brokers.items())):
             # Corretora (name ou key)
-            broker_name = data.get("name", key)
+            broker_name = data.get("broker_name", key)
             # Conta (login)
             account = str(data.get("login", "-"))
 
@@ -115,7 +115,7 @@ class StatusTab(QWidget):
                 action = "conectar"
 
             if not success:
-                broker_name = self.broker_manager.get_brokers().get(key, {}).get("name", key)
+                broker_name = self.broker_manager.get_brokers().get(key, {}).get("broker_name", key)
                 QMessageBox.warning(
                     self,
                     "Erro de Conexao",
