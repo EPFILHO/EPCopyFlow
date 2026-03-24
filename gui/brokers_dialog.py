@@ -25,7 +25,7 @@ class BrokersDialog(QDialog):
         self.config = config
         self.broker_manager = broker_manager
         self.setWindowTitle("Cadastro de Corretoras")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(450)
         self._init_ui()
         self._populate_brokers()
         self._clear_fields()
@@ -34,17 +34,21 @@ class BrokersDialog(QDialog):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
+
+        # Selecao de Corretora
         select_layout = QHBoxLayout()
         select_layout.addWidget(QLabel("Selecionar corretora:"))
         self.combo = QComboBox()
         select_layout.addWidget(self.combo)
         layout.addLayout(select_layout)
 
+        # Campos de Texto
         self.name_edit = QLineEdit()
         self.client_edit = QLineEdit()
         self.broker_name_edit = QLineEdit()
         self.login_edit = QLineEdit()
         
+        # Senha com toggle
         password_layout = QHBoxLayout()
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.Password)
@@ -64,6 +68,7 @@ class BrokersDialog(QDialog):
         layout.addWidget(QLabel("Senha:")); layout.addLayout(password_layout)
         layout.addWidget(QLabel("Servidor:")); layout.addWidget(self.server_edit)
 
+        # Modo e Tipo
         mode_type_layout = QHBoxLayout()
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Hedge", "Netting"])
@@ -76,11 +81,13 @@ class BrokersDialog(QDialog):
         mode_type_layout.addWidget(self.type_combo)
         layout.addLayout(mode_type_layout)
 
+        # Role e Lot Factor
         role_lot_layout = QHBoxLayout()
         self.role_combo = QComboBox()
         self.role_combo.addItems(["master", "slave"])
         self.lot_factor_spin = QDoubleSpinBox()
         self.lot_factor_spin.setRange(0.01, 100.0)
+        self.lot_factor_spin.setDecimals(2)
         self.lot_factor_spin.setValue(1.0)
         role_lot_layout.addWidget(QLabel("Role:"))
         role_lot_layout.addWidget(self.role_combo)
@@ -89,6 +96,7 @@ class BrokersDialog(QDialog):
         role_lot_layout.addWidget(self.lot_factor_spin)
         layout.addLayout(role_lot_layout)
 
+        # Botoes
         btn_layout = QHBoxLayout()
         self.add_or_clear_btn = QPushButton("Adicionar")
         self.modify_btn = QPushButton("Modificar")
@@ -100,9 +108,11 @@ class BrokersDialog(QDialog):
         btn_layout.addWidget(self.close_btn)
         layout.addLayout(btn_layout)
 
-        info_label = QLabel("Não é possível modificar ou excluir uma corretora conectada.")
-        info_label.setStyleSheet("color: red; font-style: italic;")
-        layout.addWidget(info_label)
+        # Aviso
+        self.info_label = QLabel("Não é possível modificar ou excluir uma corretora conectada.")
+        self.info_label.setStyleSheet("color: red; font-style: italic;")
+        self.info_label.setVisible(False)
+        layout.addWidget(self.info_label)
 
     def _connect_signals(self):
         self.combo.currentIndexChanged.connect(self._on_combo_changed)
@@ -126,6 +136,7 @@ class BrokersDialog(QDialog):
         self._broker_keys = []
         brokers = self.broker_manager.get_brokers()
         connected = self.broker_manager.get_connected_brokers()
+        
         model = QStandardItemModel()
         for key in sorted(brokers.keys()):
             item = QStandardItem(key)
@@ -133,6 +144,7 @@ class BrokersDialog(QDialog):
             item.setForeground(QColor("red" if is_connected else "green"))
             model.appendRow(item)
             self._broker_keys.append(key)
+            
         self.combo.setModel(model)
         self.combo.setCurrentIndex(-1)
         self.combo.blockSignals(False)
@@ -142,8 +154,10 @@ class BrokersDialog(QDialog):
         if idx < 0:
             self._clear_fields()
             return
+        
         key = self._broker_keys[idx]
         b = self.broker_manager.get_brokers().get(key, {})
+        
         self.name_edit.setText(b.get("name", ""))
         self.client_edit.setText(b.get("client", ""))
         self.broker_name_edit.setText(b.get("broker_name", ""))
@@ -151,9 +165,11 @@ class BrokersDialog(QDialog):
         self.password_edit.setText(b.get("password", ""))
         self.server_edit.setText(b.get("server", ""))
         self.mode_combo.setCurrentText(b.get("mode", "Hedge"))
-        self.type_combo.setCurrentText(b.get("type", "Demo"))
+        # Suporta tanto 'type' quanto 'type_'
+        self.type_combo.setCurrentText(b.get("type", b.get("type_", "Demo")))
         self.role_combo.setCurrentText(b.get("role", "master"))
         self.lot_factor_spin.setValue(b.get("lot_factor", 1.0))
+        
         self._update_buttons()
 
     def _clear_fields(self):
@@ -172,18 +188,27 @@ class BrokersDialog(QDialog):
         key = self._broker_keys[idx] if has_sel else None
         is_conn = key in self.broker_manager.get_connected_brokers() if key else False
         
-        fields_ok = all([self.name_edit.text().strip(), self.login_edit.text().strip(), self.password_edit.text().strip(), self.server_edit.text().strip()])
+        fields_ok = all([
+            self.name_edit.text().strip(),
+            self.broker_name_edit.text().strip(),
+            self.login_edit.text().strip(),
+            self.password_edit.text().strip(),
+            self.server_edit.text().strip()
+        ])
         
         self.add_or_clear_btn.setText("Limpar" if has_sel else "Adicionar")
         self.add_or_clear_btn.setEnabled(True if has_sel else fields_ok)
-        self.modify_btn.setEnabled(has_sel and not is_conn)
+        self.modify_btn.setEnabled(has_sel and not is_conn and fields_ok)
         self.remove_btn.setEnabled(has_sel and not is_conn)
+        self.info_label.setVisible(has_sel and is_conn)
 
     def _generate_ports(self):
         BASE_PORT = 15555
         used = set()
         for b in self.broker_manager.get_brokers().values():
-            if "push_port" in b: used.add(int(b["push_port"]))
+            if "push_port" in b: 
+                try: used.add(int(b["push_port"]))
+                except: pass
         p = BASE_PORT
         while p in used: p += 1
         return p
@@ -192,31 +217,41 @@ class BrokersDialog(QDialog):
         if self.combo.currentIndex() >= 0:
             self._clear_fields()
             return
+        
         data = self._get_data()
         data["push_port"] = self._generate_ports()
+        
         if self.broker_manager.add_broker(**data):
-            self.brokers_updated.emit()
             self._populate_brokers()
+            QMessageBox.information(self, "Sucesso", f"Corretora {data['login']} adicionada e instancia MT5 configurada.")
+        else:
+            QMessageBox.warning(self, "Erro", "Nao foi possivel adicionar a corretora ou criar a instancia MT5.")
 
     def _on_modify_clicked(self):
         idx = self.combo.currentIndex()
         if idx < 0: return
+        
         old_key = self._broker_keys[idx]
         data = self._get_data()
         b = self.broker_manager.get_brokers().get(old_key, {})
         data["push_port"] = b.get("push_port")
+        
         if self.broker_manager.modify_broker(old_key, **data):
-            self.brokers_updated.emit()
             self._populate_brokers()
+            QMessageBox.information(self, "Sucesso", "Dados da corretora atualizados.")
+        else:
+            QMessageBox.warning(self, "Erro", "Erro ao modificar corretora.")
 
     def _on_remove_clicked(self):
         idx = self.combo.currentIndex()
         if idx < 0: return
+        
         key = self._broker_keys[idx]
         if QMessageBox.question(self, "Excluir", f"Excluir {key}?") == QMessageBox.Yes:
             if self.broker_manager.remove_broker(key):
-                self.brokers_updated.emit()
                 self._populate_brokers()
+            else:
+                QMessageBox.warning(self, "Erro", "Erro ao remover corretora.")
 
     def _get_data(self):
         return {
@@ -227,7 +262,7 @@ class BrokersDialog(QDialog):
             "password": self.password_edit.text().strip(),
             "server": self.server_edit.text().strip(),
             "mode": self.mode_combo.currentText(),
-            "type_": self.type_combo.currentText(),
+            "type": self.type_combo.currentText(),
             "role": self.role_combo.currentText(),
             "lot_factor": self.lot_factor_spin.value()
         }
