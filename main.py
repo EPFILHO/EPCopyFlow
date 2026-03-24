@@ -71,6 +71,10 @@ class EPCopyFlowApp:
         # Parar watchdog graciosamente
         self.mt5_monitor.stop()
         logger.info("MT5ProcessMonitor parado.")
+        
+        # Fechar todos os processos MT5 antes de encerrar
+        self.broker_manager.disconnect_all_brokers()
+        logger.info("Todos os processos MT5 foram encerrados.")
 
         try:
             await asyncio.wait_for(self.zmq_bridge.stop(), timeout=3.0)
