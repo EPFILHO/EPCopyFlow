@@ -1,140 +1,157 @@
 # core/mt5_process_monitor.py
-# Versão 1.0.9.i - envio 1
-import os
-import psutil
-import subprocess
+# EPCopyFlow - Watchdog de processos MT5
+#
+# Responsabilidade: monitorar em background se cada instancia MT5 marcada
+# como "conectada" no BrokerManager ainda esta rodando. Se detectar que o
+# processo terminou (fechamento acidental), reinicia automaticamente.
+#
+# Design:
+#   - Roda em uma thread daemon separada (nao bloqueia o event loop do Qt/asyncio)
+#   - Delega o restart ao BrokerManager.connect_broker(key) para reutilizar
+#     toda a logica de setup_portable_instance + create_mt5_config ja existente
+#   - Sem dependencia de zmq_router ou asyncio event_loop (desacoplado)
+#   - check_interval configuravel (padrao: 10 segundos)
+
 import time
 import logging
-import asyncio
 import threading
 
 logger = logging.getLogger(__name__)
 
-class MT5ProcessMonitor:
-    def __init__(self, broker_manager, event_loop, check_interval=10):
-        """
-        Inicializa o monitor de processos MT5.
 
+class MT5ProcessMonitor:
+    """
+    Watchdog que monitora processos MT5 e os reinicia em caso de fechamento acidental.
+
+    Uso:
+        monitor = MT5ProcessMonitor(broker_manager)
+        monitor.start()   # inicia a thread de monitoramento
+        ...               # durante a vida do app
+        monitor.stop()    # encerra a thread graciosamente no shutdown
+    """
+
+    def __init__(self, broker_manager, check_interval=10):
+        """
         Args:
-            broker_manager (BrokerManager): Instância do BrokerManager para acessar processos e configurações.
-            event_loop (asyncio.AbstractEventLoop): Loop de eventos asyncio principal.
-            check_interval (int): Intervalo de verificação em segundos.
+            broker_manager (BrokerManager): Gerenciador de corretoras/instancias.
+            check_interval (int): Intervalo em segundos entre cada verificacao (padrao: 10).
         """
         self.broker_manager = broker_manager
-        self.event_loop = event_loop
         self.check_interval = check_interval
         self.running = False
-        self.monitor_thread = None
-        logger.info("MT5ProcessMonitor inicializado.")
+        self._thread = None
+        logger.info(f"MT5ProcessMonitor inicializado (intervalo: {check_interval}s).")
+
+    # ------------------------------------------------------------------
+    # Ciclo de vida
+    # ------------------------------------------------------------------
 
     def start(self):
-        """Inicia a thread de monitoramento."""
-        if not self.monitor_thread or not self.monitor_thread.is_alive():
-            self.running = True
-            self.monitor_thread = threading.Thread(target=self.monitor_loop, daemon=True)
-            self.monitor_thread.start()
-            logger.info("MT5ProcessMonitor iniciado.")
-        else:
-            logger.warning("MT5ProcessMonitor já está em execução.")
+        """Inicia a thread de monitoramento em background."""
+        if self._thread and self._thread.is_alive():
+            logger.warning("MT5ProcessMonitor ja esta em execucao. Ignorando start().")
+            return
+        self.running = True
+        self._thread = threading.Thread(
+            target=self._monitor_loop,
+            name="MT5ProcessMonitor",
+            daemon=True  # encerra automaticamente quando o processo principal terminar
+        )
+        self._thread.start()
+        logger.info("MT5ProcessMonitor iniciado.")
 
-    def stop(self):
-        """Para a thread de monitoramento."""
-        if self.running:
-            self.running = False
-            if self.monitor_thread and self.monitor_thread.is_alive():
-                self.monitor_thread.join(timeout=5)
-                if self.monitor_thread.is_alive():
-                    logger.warning("Thread de MT5ProcessMonitor não terminou após join.")
-                else:
-                    logger.info("Thread de MT5ProcessMonitor encerrada com sucesso.")
-            logger.info("MT5ProcessMonitor parado.")
+    def stop(self, timeout=6):
+        """
+        Para a thread de monitoramento.
 
-    def monitor_loop(self):
-        """Loop principal que verifica e reinicia processos MT5 fechados."""
+        Args:
+            timeout (int): Tempo maximo de espera pelo encerramento da thread (segundos).
+        """
+        if not self.running:
+            return
+        self.running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+            if self._thread.is_alive():
+                logger.warning("Thread do MT5ProcessMonitor nao terminou apos join — sera encerrada pelo OS.")
+            else:
+                logger.info("Thread do MT5ProcessMonitor encerrada com sucesso.")
+        logger.info("MT5ProcessMonitor parado.")
+
+    # ------------------------------------------------------------------
+    # Loop principal
+    # ------------------------------------------------------------------
+
+    def _monitor_loop(self):
+        """Loop que roda na thread daemon e chama _check_and_restart periodicamente."""
+        logger.debug("MT5ProcessMonitor: loop de monitoramento iniciado.")
         while self.running:
             try:
-                self.check_and_restart_processes()
+                self._check_and_restart()
             except Exception as e:
-                logger.error(f"Erro no loop de monitoramento: {e}")
-            time.sleep(self.check_interval)
-        logger.debug("Monitoramento de processos MT5 encerrado.")
+                logger.error(f"MT5ProcessMonitor: erro inesperado no loop: {e}", exc_info=True)
+            # Espera fracionada para responder ao stop() mais rapidamente
+            for _ in range(self.check_interval * 2):
+                if not self.running:
+                    break
+                time.sleep(0.5)
+        logger.debug("MT5ProcessMonitor: loop de monitoramento encerrado.")
 
-    def check_and_restart_processes(self):
-        """Verifica processos MT5 e reinicia os que estão fechados."""
-        # Itera sobre todas as corretoras conhecidas
-        for key in self.broker_manager.get_brokers():
+    # ------------------------------------------------------------------
+    # Logica de verificacao
+    # ------------------------------------------------------------------
+
+    def _check_and_restart(self):
+        """
+        Verifica cada broker marcado como conectado:
+          - Se o processo MT5 nao existe mais (poll() != None ou entrada ausente),
+            limpa o estado e chama connect_broker() para reabrir o MT5.
+        """
+        brokers = list(self.broker_manager.get_brokers().keys())  # copia para evitar race condition
+
+        for key in brokers:
+            # So monitora brokers que o usuario conectou intencionalmente
             if not self.broker_manager.is_connected(key):
-                continue  # Pula corretoras não conectadas
+                continue
 
-            # Verifica se o processo está registrado e ativo
             process = self.broker_manager.mt5_processes.get(key)
-            if process:
-                poll_result = process.poll()
-                if poll_result is not None:  # Processo terminou
-                    logger.warning(f"Processo MT5 para {key} terminou (código de saída: {poll_result}). Reiniciando...")
-                    # Remove o processo do rastreamento
-                    del self.broker_manager.mt5_processes[key]
-                    self.broker_manager.connected_brokers[key] = False
-                    # Tenta reconectar
-                    self.restart_mt5_instance(key)
-            else:
-                # Processo não está registrado, mas a corretora está marcada como conectada
-                logger.warning(f"Processo MT5 para {key} não encontrado, mas está marcado como conectado. Reiniciando...")
-                self.restart_mt5_instance(key)
 
-    def restart_mt5_instance(self, key):
-        """Reinicia uma instância MT5 para a corretora especificada."""
-        instance_path = os.path.join(self.broker_manager.instances_dir, key, "terminal64.exe")
-        if not os.path.exists(instance_path):
-            logger.error(f"Instância do MT5 não encontrada para {key}: {instance_path}")
-            return False
+            if process is None:
+                # Broker marcado como conectado mas sem processo registrado
+                logger.warning(
+                    f"Watchdog: broker '{key}' esta marcado como conectado mas sem processo registrado. "
+                    f"Reiniciando MT5..."
+                )
+                self._restart(key)
 
+            elif process.poll() is not None:
+                # Processo terminou (exit code qualquer)
+                exit_code = process.poll()
+                logger.warning(
+                    f"Watchdog: MT5 do broker '{key}' fechou inesperadamente "
+                    f"(exit code: {exit_code}). Reiniciando..."
+                )
+                # Limpa o estado antes de reconectar
+                self.broker_manager.mt5_processes.pop(key, None)
+                self.broker_manager.connected_brokers[key] = False
+                self._restart(key)
+
+    def _restart(self, key):
+        """
+        Delega o restart ao BrokerManager.connect_broker(), que ja contem
+        toda a logica de setup_portable_instance + create_mt5_config.
+
+        Args:
+            key (str): Chave do broker a ser reiniciado.
+        """
         try:
-            # Obtém configurações da corretora
-            broker_config = self.broker_manager.brokers[key]
-            # Iniciar minimizado no Windows com parâmetros de login
-            if os.name == 'nt':
-                si = subprocess.STARTUPINFO()
-                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                si.wShowWindow = 6  # SW_MINIMIZE
-                process = subprocess.Popen(
-                    [
-                        instance_path,
-                        "/portable",
-                        f"/login:{broker_config['login']}",
-                        f"/password:{broker_config['password']}",
-                        f"/server:{broker_config['server']}"
-                    ],
-                    cwd=os.path.dirname(instance_path),
-                    startupinfo=si
-                )
+            success = self.broker_manager.connect_broker(key)
+            if success:
+                logger.info(f"Watchdog: MT5 do broker '{key}' reiniciado com sucesso.")
             else:
-                process = subprocess.Popen(
-                    [
-                        instance_path,
-                        "/portable",
-                        f"/login:{broker_config['login']}",
-                        f"/password:{broker_config['password']}",
-                        f"/server:{broker_config['server']}"
-                    ],
-                    cwd=os.path.dirname(instance_path)
+                logger.error(
+                    f"Watchdog: falha ao reiniciar MT5 do broker '{key}'. "
+                    f"Verifique os logs do BrokerManager."
                 )
-            self.broker_manager.mt5_processes[key] = process
-            self.broker_manager.connected_brokers[key] = True
-            logger.info(f"MT5 reiniciado com sucesso para {key} (PID: {process.pid}).")
-
-            # Reconecta os sockets ZMQ no loop de eventos principal
-            if self.broker_manager.zmq_router:
-                asyncio.run_coroutine_threadsafe(
-                    self.broker_manager.zmq_router.connect_broker_sockets(key, broker_config),
-                    self.event_loop
-                )
-                logger.info(f"Solicitado ao ZmqRouter para reconectar sockets para {key}.")
-            return True
         except Exception as e:
-            logger.error(f"Erro ao reiniciar MT5 para {key}: {e}")
-            self.broker_manager.connected_brokers[key] = False
-            return False
-
-# core/mt5_process_monitor.py
-# Versão 1.0.9.i - envio 1
+            logger.error(f"Watchdog: excecao ao tentar reiniciar broker '{key}': {e}", exc_info=True)
