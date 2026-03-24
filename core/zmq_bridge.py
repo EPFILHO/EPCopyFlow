@@ -113,7 +113,8 @@ class ZmqBridge(QObject):
         self._sockets.clear()
 
         if self._context:
-            self._context.term()
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(None, self._context.term)
             self._context = None
 
         logger.info("ZmqBridge encerrado.")
