@@ -2,12 +2,16 @@
 import logging
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QMenuBar
 from PySide6.QtGui import QAction
+from PySide6.QtCore import Signal
+
 from gui.brokers_dialog import BrokersDialog
-from gui.tabs.status_tab import StatusTab 
+from gui.tabs.status_tab import StatusTab
 
 logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
+    closing = Signal()  # Sinal para avisar o main.py que vamos fechar
+
     def __init__(self, config, broker_manager, zmq_bridge, copy_engine):
         super().__init__()
         self.config = config
@@ -50,3 +54,8 @@ class MainWindow(QMainWindow):
     def _open_brokers_dialog(self):
         dialog = BrokersDialog(self.config, self.broker_manager, self)
         dialog.exec()
+
+    def closeEvent(self, event):
+        """Sobrescreve o fechamento para emitir nosso sinal customizado."""
+        self.closing.emit()
+        event.accept()
