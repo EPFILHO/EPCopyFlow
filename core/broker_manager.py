@@ -9,6 +9,7 @@ from PySide6.QtCore import QObject, Signal
 
 logger = logging.getLogger(__name__)
 
+
 class BrokerManager(QObject):
     brokers_updated = Signal()
 
@@ -19,7 +20,7 @@ class BrokerManager(QObject):
         self.base_mt5_path = base_mt5_path
         self.root_path = root_path
         self.instances_dir = os.path.join(self.root_path, ".mt5_instances")
-        
+
         self.mt5_processes = {}
         self.connected_brokers = {}
         self.brokers = self.load_brokers()
@@ -29,8 +30,8 @@ class BrokerManager(QObject):
             if os.path.exists(self.brokers_file):
                 with open(self.brokers_file, 'r') as f:
                     brokers = json.load(f)
-                    self.connected_brokers = {key: False for key in brokers}
-                    return brokers
+                self.connected_brokers = {key: False for key in brokers}
+                return brokers
             return {}
         except Exception as e:
             logger.error(f"Erro ao carregar corretoras: {e}")
@@ -44,14 +45,19 @@ class BrokerManager(QObject):
             logger.error(f"Erro ao salvar corretoras: {e}")
 
     def add_broker(self, **data):
+        # Normaliza chave de tipo (suporta 'type_' ou 'type')
+        if 'type_' in data and 'type' not in data:
+            data['type'] = data.pop('type_')
+
         key = f"{data['broker_name'].upper()}-{data['login']}"
         if key in self.brokers:
+            logger.warning(f"Corretora {key} ja cadastrada.")
             return None
-        
+
         instance_path = self.setup_portable_instance(key)
         if not instance_path:
             return None
-            
+
         self.brokers[key] = data
         self.save_brokers()
         self.connected_brokers[key] = False
@@ -62,20 +68,20 @@ class BrokerManager(QObject):
     def remove_broker(self, key):
         if key not in self.brokers:
             return False
-            
+
         if self.is_connected(key):
             self.disconnect_broker(key)
-            
+
         del self.brokers[key]
         self.save_brokers()
-        
+
         if key in self.connected_brokers:
             del self.connected_brokers[key]
-            
+
         instance_path = os.path.join(self.instances_dir, key)
         if os.path.exists(instance_path):
             shutil.rmtree(instance_path, ignore_errors=True)
-            
+
         self.brokers_updated.emit()
         return True
 
@@ -88,59 +94,121 @@ class BrokerManager(QObject):
         return self.add_broker(**data)
 
     def setup_portable_instance(self, key):
+        """
+        Cria uma instancia portatil do MT5 para a corretora.
+        Em vez de copiar todo o diretorio base (lento/pesado),
+        copia apenas o terminal64.exe e cria a estrutura MQL5.
+        """
         instance_path = os.path.join(self.instances_dir, key)
         executable = os.path.join(instance_path, "terminal64.exe")
-        
-        if not os.path.exists(instance_path):
-            try:
-                os.makedirs(self.instances_dir, exist_ok=True)
-                shutil.copytree(self.base_mt5_path, instance_path)
-                self.copy_dlls(instance_path)
-                self.copy_expert(instance_path)
-                
-                import win32api, win32con
-                win32api.SetFileAttributes(instance_path, win32con.FILE_ATTRIBUTE_HIDDEN)
-            except Exception as e:
-                logger.error(f"Erro ao criar instância para {key}: {e}")
+
+        if os.path.exists(instance_path):
+            # Instancia ja existe, apenas retorna o executavel
+            return executable
+
+        try:
+            # Cria diretorio da instancia
+            os.makedirs(instance_path, exist_ok=True)
+
+            # Copia apenas o terminal64.exe do MT5 base
+            src_exe = os.path.join(self.base_mt5_path, "terminal64.exe")
+            if not os.path.exists(src_exe):
+                logger.error(f"terminal64.exe nao encontrado em: {self.base_mt5_path}")
+                shutil.rmtree(instance_path, ignore_errors=True)
                 return None
-        return executable
+            shutil.copy2(src_exe, executable)
+
+            # Cria estrutura de pastas MQL5
+            for subdir in [
+                "MQL5\\Experts",
+                "MQL5\\Libraries",
+                "MQL5\\Files",
+                "MQL5\\Indicators",
+                "MQL5\\Scripts",
+            ]:
+                os.makedirs(os.path.join(instance_path, subdir), exist_ok=True)
+
+            # Copia DLLs e EA
+            self.copy_dlls(instance_path)
+            self.copy_expert(instance_path)
+
+            # Oculta diretorio no Windows
+            try:
+                import win32api
+                import win32con
+                win32api.SetFileAttributes(instance_path, win32con.FILE_ATTRIBUTE_HIDDEN)
+            except ImportError:
+                logger.warning("pywin32 nao instalado - diretorio nao sera ocultado.")
+            except Exception as e:
+                logger.warning(f"Nao foi possivel ocultar diretorio {instance_path}: {e}")
+
+            logger.info(f"Instancia MT5 criada com sucesso: {instance_path}")
+            return executable
+
+        except Exception as e:
+            logger.error(f"Erro ao criar instancia para {key}: {e}")
+            shutil.rmtree(instance_path, ignore_errors=True)
+            return None
 
     def copy_dlls(self, instance_path):
         src = os.path.join(self.root_path, "dlls")
         dst = os.path.join(instance_path, "MQL5", "Libraries")
-        if not os.path.exists(dst):
-            os.makedirs(dst)
+        os.makedirs(dst, exist_ok=True)
         if os.path.exists(src):
+            copied = 0
             for f in os.listdir(src):
-                if f.endswith(".dll"):
+                if f.lower().endswith(".dll"):
                     shutil.copy2(os.path.join(src, f), dst)
+                    copied += 1
+            logger.info(f"{copied} DLL(s) copiada(s) para {dst}")
+        else:
+            logger.warning(f"Pasta dlls nao encontrada: {src}")
 
     def copy_expert(self, instance_path):
         src = os.path.join(self.root_path, "mt5_ea", "EPCopyBridge.ex5")
         dst = os.path.join(instance_path, "MQL5", "Experts")
-        if not os.path.exists(dst):
-            os.makedirs(dst)
+        os.makedirs(dst, exist_ok=True)
         if os.path.exists(src):
             shutil.copy2(src, dst)
+            logger.info(f"EA EPCopyBridge.ex5 copiado para {dst}")
+        else:
+            logger.warning(f"EA nao encontrado: {src}")
 
     def create_mt5_config(self, key, data):
+        """
+        Cria arquivo config.ini dentro da instancia MT5,
+        na pasta MQL5/Files, para ser lido pelo EA EPCopyBridge.
+        """
         path = os.path.join(self.instances_dir, key, "MQL5", "Files", "config.ini")
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(f"""[ZMQ]
-BrokerKey={key}
-[Ports]
-PushPort={data.get('push_port')}
-""")
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write("[ZMQ]\n")
+                f.write(f"BrokerKey={key}\n")
+                f.write(f"Role={data.get('role', 'master')}\n")
+                f.write(f"LotFactor={data.get('lot_factor', 1.0)}\n")
+                f.write("[Ports]\n")
+                f.write(f"PushPort={data.get('push_port', 15555)}\n")
+                f.write("[Account]\n")
+                f.write(f"Login={data.get('login', '')}\n")
+                f.write(f"Server={data.get('server', '')}\n")
+                f.write(f"Mode={data.get('mode', 'Hedge')}\n")
+                f.write(f"Type={data.get('type', 'Demo')}\n")
+            logger.info(f"Config MT5 criado: {path}")
+        except Exception as e:
+            logger.error(f"Erro ao criar config MT5 para {key}: {e}")
 
     def connect_broker(self, key):
         if key not in self.brokers or self.is_connected(key):
             return False
         exe = os.path.join(self.instances_dir, key, "terminal64.exe")
+        if not os.path.exists(exe):
+            logger.error(f"terminal64.exe nao encontrado para {key}: {exe}")
+            return False
         try:
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            si.wShowWindow = 6
+            si.wShowWindow = 6  # SW_MINIMIZE
             self.mt5_processes[key] = subprocess.Popen(
                 [exe, "/portable"],
                 cwd=os.path.dirname(exe),
@@ -148,9 +216,10 @@ PushPort={data.get('push_port')}
             )
             self.connected_brokers[key] = True
             self.brokers_updated.emit()
+            logger.info(f"MT5 iniciado para {key}")
             return True
         except Exception as e:
-            logger.error(f"Erro ao iniciar MT5: {e}")
+            logger.error(f"Erro ao iniciar MT5 para {key}: {e}")
             return False
 
     def disconnect_broker(self, key):
@@ -159,11 +228,12 @@ PushPort={data.get('push_port')}
             p.terminate()
             try:
                 p.wait(timeout=5)
-            except:
+            except Exception:
                 p.kill()
             del self.mt5_processes[key]
             self.connected_brokers[key] = False
             self.brokers_updated.emit()
+            logger.info(f"MT5 encerrado para {key}")
             return True
         return False
 
@@ -174,4 +244,5 @@ PushPort={data.get('push_port')}
         return self.brokers
 
     def get_connected_brokers(self):
+        """Retorna lista de keys de corretoras conectadas."""
         return [k for k, v in self.connected_brokers.items() if v]
