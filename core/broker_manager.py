@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import subprocess
 import logging
@@ -32,22 +33,69 @@ class BrokerManager:
 
         os.makedirs(self.instances_dir, exist_ok=True)
 
+    # ------------------------------------------------------------------
+    # Config helpers
+    # ------------------------------------------------------------------
+
+    def _get_parser(self):
+        """Retorna o configparser interno do ConfigManager."""
+        if hasattr(self.config, 'config'):
+            return self.config.config
+        return self.config
+
+    def _save_broker_to_config(self, key, data):
+        """Persiste os dados do broker na secao [Brokers] do config.ini."""
+        parser = self._get_parser()
+        if not parser.has_section('Brokers'):
+            parser.add_section('Brokers')
+        parser.set('Brokers', key, json.dumps(data))
+        if hasattr(self.config, 'save_config'):
+            self.config.save_config()
+        else:
+            try:
+                with open(self.config.config_file, 'w', encoding='utf-8') as f:
+                    parser.write(f)
+            except Exception as e:
+                logger.error(f'Erro ao salvar config: {e}')
+
+    def _remove_broker_from_config(self, key):
+        """Remove o broker da secao [Brokers] do config.ini."""
+        parser = self._get_parser()
+        if parser.has_section('Brokers') and parser.has_option('Brokers', key):
+            parser.remove_option('Brokers', key)
+            if hasattr(self.config, 'save_config'):
+                self.config.save_config()
+            else:
+                try:
+                    with open(self.config.config_file, 'w', encoding='utf-8') as f:
+                        parser.write(f)
+                except Exception as e:
+                    logger.error(f'Erro ao salvar config: {e}')
+
+    # ------------------------------------------------------------------
+    # Carregamento
+    # ------------------------------------------------------------------
+
     def _load_brokers(self):
         """Carrega brokers da secao [Brokers] do config.ini."""
         try:
-            if self.config.has_section('Brokers'):
-                for key in self.config.options('Brokers'):
-                    import json
-                    raw = self.config.get('Brokers', key)
+            parser = self._get_parser()
+            if parser.has_section('Brokers'):
+                for key in parser.options('Brokers'):
+                    raw = parser.get('Brokers', key)
                     try:
                         data = json.loads(raw)
                     except Exception:
                         data = {'name': raw}
                     self.brokers[key] = data
                     self.connected_brokers[key] = False
-                logger.info(f'Brokers carregados: {list(self.brokers.keys())}')
+            logger.info(f'Brokers carregados: {list(self.brokers.keys())}')
         except Exception as e:
             logger.error(f'Erro ao carregar brokers do config: {e}')
+
+    # ------------------------------------------------------------------
+    # Setup de instancia
+    # ------------------------------------------------------------------
 
     def setup_portable_instance(self, key):
         """Copia a instancia base do MT5 para uma pasta portavel dedicada."""
@@ -67,8 +115,7 @@ class BrokerManager:
                 return None
 
         # Garantir subpastas MQL5
-        for subdir in ['MQL5/Experts', 'MQL5/Libraries', 'MQL5/Files',
-                        'MQL5/Indicators', 'MQL5/Scripts']:
+        for subdir in ['MQL5/Experts', 'MQL5/Libraries', 'MQL5/Files', 'MQL5/Indicators', 'MQL5/Scripts']:
             os.makedirs(os.path.join(instance_path, subdir), exist_ok=True)
 
         self.copy_dlls(instance_path)
@@ -100,7 +147,6 @@ class BrokerManager:
         possible_names = ['EPCopyBridge.ex5', 'ZmqTraderBridge.ex5']
         dst_folder = os.path.join(instance_path, 'MQL5', 'Experts')
         os.makedirs(dst_folder, exist_ok=True)
-
         found = False
         for name in possible_names:
             src = os.path.join(self.root_path, 'mt5_ea', name)
@@ -111,7 +157,6 @@ class BrokerManager:
                 logger.info(f'EA {name} copiado como EPCopyBridge.ex5')
                 found = True
                 break
-
         if not found:
             logger.warning('Nenhum EA encontrado em mt5_ea/')
 
@@ -119,10 +164,8 @@ class BrokerManager:
         """Cria o config.ini dentro da instancia do MT5 para o broker."""
         path = os.path.join(self.instances_dir, key, 'MQL5', 'Files', 'config.ini')
         os.makedirs(os.path.dirname(path), exist_ok=True)
-
         base_port = int(data.get('push_port') or data.get('zmq_port') or 15555)
         nl = chr(10)
-
         lines = [
             '[ZMQ]',
             'BrokerKey=' + str(key),
@@ -140,7 +183,6 @@ class BrokerManager:
             'Mode=' + str(data.get('mode', 'Hedge')),
             'Type=' + str(data.get('type', 'Demo')),
         ]
-
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(nl.join(lines) + nl)
@@ -148,23 +190,23 @@ class BrokerManager:
         except Exception as e:
             logger.error(f'Erro ao criar config MT5: {e}')
 
+    # ------------------------------------------------------------------
+    # Conexao / Desconexao
+    # ------------------------------------------------------------------
+
     def connect_broker(self, key):
         """Inicia o MT5 portavel para o broker indicado."""
         if self.is_connected(key):
             return True
-
         data = self.brokers.get(key, {})
         exe = self.setup_portable_instance(key)
         if not exe:
             return False
-
         self.create_mt5_config(key, data)
-
         try:
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             si.wShowWindow = 6  # SW_MINIMIZE
-
             self.mt5_processes[key] = subprocess.Popen(
                 [exe, '/portable'],
                 cwd=os.path.dirname(exe),
@@ -192,29 +234,63 @@ class BrokerManager:
             return True
         return False
 
+    # ------------------------------------------------------------------
+    # Consultas
+    # ------------------------------------------------------------------
+
     def is_connected(self, key):
         """Retorna True se o broker esta conectado."""
         return self.connected_brokers.get(key, False)
 
     def get_brokers(self):
-        """Retorna dict com todos os brokers configurados: {key: data}."""
+        """Retorna dict com todos os brokers cadastrados: {key: data}."""
         return self.brokers
 
     def get_connected_brokers(self):
         """Retorna lista de keys dos brokers atualmente conectados."""
         return [k for k, v in self.connected_brokers.items() if v]
 
-    def add_broker(self, key, data):
-        """Adiciona ou atualiza um broker em runtime."""
-        self.brokers[key] = data
+    # ------------------------------------------------------------------
+    # CRUD de brokers
+    # ------------------------------------------------------------------
+
+    def add_broker(self, **kwargs):
+        """
+        Adiciona um broker em runtime e persiste no config.ini.
+        O 'key' e derivado do campo 'login' (obrigatorio).
+        Retorna True em caso de sucesso.
+        """
+        login = kwargs.get('login', '').strip()
+        if not login:
+            logger.error('add_broker: campo login e obrigatorio')
+            return False
+        key = login
+        self.brokers[key] = dict(kwargs)
         if key not in self.connected_brokers:
             self.connected_brokers[key] = False
+        self._save_broker_to_config(key, self.brokers[key])
         logger.info(f'Broker adicionado: {key}')
+        return True
+
+    def modify_broker(self, key, **kwargs):
+        """
+        Atualiza os dados de um broker existente e persiste no config.ini.
+        Retorna True em caso de sucesso.
+        """
+        if key not in self.brokers:
+            logger.error(f'modify_broker: broker {key} nao encontrado')
+            return False
+        self.brokers[key].update(kwargs)
+        self._save_broker_to_config(key, self.brokers[key])
+        logger.info(f'Broker modificado: {key}')
+        return True
 
     def remove_broker(self, key):
-        """Remove um broker (desconecta se necessario)."""
+        """Remove um broker (desconecta se necessario) e apaga do config.ini."""
         if self.is_connected(key):
             self.disconnect_broker(key)
         self.brokers.pop(key, None)
         self.connected_brokers.pop(key, None)
+        self._remove_broker_from_config(key)
         logger.info(f'Broker removido: {key}')
+        return True
