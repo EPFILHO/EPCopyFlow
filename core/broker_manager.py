@@ -50,11 +50,11 @@ class BrokerManager(QObject):
         if key in self.brokers:
             logger.warning(f'Corretora {key} ja cadastrada.')
             return None
-
+            
         instance_path = self.setup_portable_instance(key)
         if not instance_path:
             return None
-
+            
         self.brokers[key] = data
         self.save_brokers()
         self.connected_brokers[key] = False
@@ -73,7 +73,7 @@ class BrokerManager(QObject):
         self.save_brokers()
         if key in self.connected_brokers:
             del self.connected_brokers[key]
-
+            
         instance_path = os.path.join(self.instances_dir, key)
         if os.path.exists(instance_path):
             shutil.rmtree(instance_path, ignore_errors=True)
@@ -103,48 +103,34 @@ class BrokerManager(QObject):
     def setup_portable_instance(self, key):
         instance_path = os.path.join(self.instances_dir, key)
         executable = os.path.join(instance_path, 'terminal64.exe')
-
-        try:
-            os.makedirs(instance_path, exist_ok=True)
-            
-            essential_files = ['terminal64.exe', 'mql5.dll', 'terminal.ico']
-            
-            for filename in essential_files:
-                src = os.path.join(self.base_mt5_path, filename)
-                dst = os.path.join(instance_path, filename)
-                if os.path.exists(src):
-                    shutil.copy2(src, dst)
-                    logger.debug(f'Arquivo copiado: {filename}')
-                elif filename == 'terminal64.exe':
-                    logger.error(f'terminal64.exe nao encontrado em: {self.base_mt5_path}')
-                    if not os.path.exists(executable):
-                        shutil.rmtree(instance_path, ignore_errors=True)
-                        return None
-
-            for subdir in [
-                'MQL5/Experts',
-                'MQL5/Libraries',
-                'MQL5/Files',
-                'MQL5/Indicators',
-                'MQL5/Scripts',
-            ]:
-                os.makedirs(os.path.join(instance_path, subdir), exist_ok=True)
-
-            self.copy_dlls(instance_path)
-            self.copy_expert(instance_path)
-
+        
+        if not os.path.exists(instance_path):
             try:
-                import win32api, win32con
-                win32api.SetFileAttributes(instance_path, win32con.FILE_ATTRIBUTE_HIDDEN)
-            except:
-                pass
-
-            logger.info(f'Instancia MT5 preparada em: {instance_path}')
-            return executable
-
-        except Exception as e:
-            logger.error(f'Erro ao criar instancia para {key}: {e}')
-            return None
+                os.makedirs(self.instances_dir, exist_ok=True)
+                if os.path.exists(self.base_mt5_path):
+                    shutil.copytree(self.base_mt5_path, instance_path)
+                    logger.info(f'Instancia base copiada para {instance_path}')
+                else:
+                    logger.error(f'Base MT5 path nao encontrado: {self.base_mt5_path}')
+                    return None
+            except Exception as e:
+                logger.error(f'Erro ao copiar arvore base do MT5 para {key}: {e}')
+                return None
+        
+        for subdir in ['MQL5/Experts', 'MQL5/Libraries', 'MQL5/Files', 'MQL5/Indicators', 'MQL5/Scripts']:
+            os.makedirs(os.path.join(instance_path, subdir), exist_ok=True)
+            
+        self.copy_dlls(instance_path)
+        self.copy_expert(instance_path)
+        
+        try:
+            import win32api, win32con
+            win32api.SetFileAttributes(instance_path, win32con.FILE_ATTRIBUTE_HIDDEN)
+        except:
+            pass
+            
+        logger.info(f'Instancia MT5 preparada em: {instance_path}')
+        return executable
 
     def copy_dlls(self, instance_path):
         src = os.path.join(self.root_path, 'dlls')
@@ -164,6 +150,8 @@ class BrokerManager(QObject):
         found = False
         for name in possible_names:
             src = os.path.join(self.root_path, 'mt5_ea', name)
+            if not os.path.exists(src):
+                src = os.path.join(self.root_path, 'mt5_ea', 'ZmqTraderBridge', name)
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(dst_folder, 'EPCopyBridge.ex5'))
                 logger.info(f'EA {name} copiado como EPCopyBridge.ex5')
@@ -176,20 +164,31 @@ class BrokerManager(QObject):
     def create_mt5_config(self, key, data):
         path = os.path.join(self.instances_dir, key, 'MQL5', 'Files', 'config.ini')
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        base_port = data.get('push_port') or data.get('zmq_port') or 15555
+        ports = {
+            'AdminPort': base_port,
+            'DataPort': base_port + 1,
+            'TradePort': base_port + 2,
+            'LivePort': base_port + 3,
+            'StrPort': base_port + 4
+        }
+        
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write('[ZMQ]
 ')
                 f.write(f'BrokerKey={key}
 ')
-                f.write(f"Role={data.get('role', 'master')}
+                f.write(f"Role={data.get('role', 'slave')}
 ")
                 f.write(f"LotFactor={data.get('lot_factor', 1.0)}
 ")
                 f.write('[Ports]
 ')
-                f.write(f"PushPort={data.get('push_port', 15555)}
-")
+                for p_name, p_val in ports.items():
+                    f.write(f'{p_name}={p_val}
+')
                 f.write('[Account]
 ')
                 f.write(f"Login={data.get('login', '')}
@@ -200,7 +199,7 @@ class BrokerManager(QObject):
 ")
                 f.write(f"Type={data.get('type', 'Demo')}
 ")
-            logger.info(f'Config MT5 criado: {path}')
+            logger.info(f'Config MT5 criado com 5 portas a partir de {base_port}: {path}')
         except Exception as e:
             logger.error(f'Erro ao criar config MT5 para {key}: {e}')
 
@@ -213,7 +212,7 @@ class BrokerManager(QObject):
             logger.warning(f'Executavel sumiu para {key}, tentando recuperar setup...')
             exe = self.setup_portable_instance(key)
             if not exe: return False
-
+            
         try:
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
