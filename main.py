@@ -100,29 +100,22 @@ class EPCopyFlowApp:
 
 if __name__ == "__main__":
     try:
-        # Criacao UNICA da aplicacao e do loop
         app = QApplication(sys.argv)
-        loop = qasync.QEventLoop(app)
+        selector_loop = asyncio.SelectorEventLoop()
+        loop = qasync.QEventLoop(app, loop=selector_loop)
         asyncio.set_event_loop(loop)
-        
-        # Criar app e iniciar
+
         epcopyflow = EPCopyFlowApp()
-        
         with loop:
-            # Iniciar app
             loop.create_task(epcopyflow.start())
-            
-            # Conectar sinal de fechamento para cleanup
+
             def on_closing():
-                # Criar task de cleanup e registrar callback para parar o loop quando terminar
                 cleanup_task = asyncio.ensure_future(epcopyflow.cleanup())
                 cleanup_task.add_done_callback(lambda _: loop.stop())
-            
+
             epcopyflow.window.closing.connect(on_closing)
-            
-            # Rodar event loop
             loop.run_forever()
-    
+
     except Exception as e:
         logger.critical(f"Erro fatal na inicializacao: {e}", exc_info=True)
         sys.exit(1)
