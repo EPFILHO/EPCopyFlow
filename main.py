@@ -37,8 +37,13 @@ class EPCopyFlowApp:
         
         # 2. Inicializar Core
         self.broker_manager = BrokerManager(self.config, base_mt5, root_path)
-        self.zmq_bridge = ZmqBridge(self.config)
+        self.zmq_bridge = ZmqBridge()
         self.copy_engine = CopyEngine(self.zmq_bridge, self.broker_manager)
+
+        # Registra callback para todos os brokers master cadastrados
+        for key, data in self.broker_manager.get_brokers().items():
+            if str(data.get('role', 'slave')).lower() == 'master':
+                self.zmq_bridge.register_callback(key, self.copy_engine.on_master_message)
         
         # 3. Watchdog: monitora processos MT5 e reinicia em caso de fechamento acidental
         self.mt5_monitor = MT5ProcessMonitor(
