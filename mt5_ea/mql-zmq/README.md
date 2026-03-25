@@ -140,4 +140,51 @@ Todos os créditos ao autor original:
 
 ---
 
+## Como Completar a Cópia dos Arquivos ZMQ
+
+Alguns arquivos do mql-zmq são muito grandes para adicionar via interface web do GitHub.
+Para completar a cópia, siga os passos abaixo no VSCode:
+
+### Via Terminal no VSCode
+
+```bash
+# 1. Navegue até a pasta mt5_ea/mql-zmq
+cd mt5_ea/mql-zmq
+
+# 2. Crie um diretório temporário
+mkdir temp_zmq
+cd temp_zmq
+
+# 3. Clone o repositório original
+git clone https://github.com/dingmaotu/mql-zmq.git .
+
+# 4. Copie os arquivos faltantes
+cp Include/Zmq/Context.mqh ../Include/Zmq/
+cp Include/Zmq/Errno.mqh ../Include/Zmq/
+cp Include/Zmq/SocketOptions.mqh ../Include/Zmq/
+cp Include/Zmq/ZmqMsg.mqh ../Include/Zmq/
+
+# 5. Volte para a pasta raiz e remova o temp
+cd ..
+rm -rf temp_zmq
+
+# 6. Adicione e commite os novos arquivos
+git add Include/Zmq/
+git commit -m "feat: add remaining zmq library files (Context, Errno, SocketOptions, ZmqMsg)"
+git push
+```
+
+### Alternativa: Download Manual
+
+Se preferir, você pode baixar os arquivos diretamente:
+
+1. **Context.mqh**: https://raw.githubusercontent.com/dingmaotu/mql-zmq/master/Include/Zmq/Context.mqh
+2. **Errno.mqh**: https://raw.githubusercontent.com/dingmaotu/mql-zmq/master/Include/Zmq/Errno.mqh  
+3. **SocketOptions.mqh**: https://raw.githubusercontent.com/dingmaotu/mql-zmq/master/Include/Zmq/SocketOptions.mqh
+4. **ZmqMsg.mqh**: https://raw.githubusercontent.com/dingmaotu/mql-zmq/master/Include/Zmq/ZmqMsg.mqh
+
+Depois salve-os na pasta `mt5_ea/mql-zmq/Include/Zmq/` e faça commit via VSCode.
+
+---
+
 **EPCopyFlow** - Sistema de replicação de trades via ZMQ
