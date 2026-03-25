@@ -17,20 +17,11 @@ class BrokerManager:
         self.config = config
         self.base_mt5_path = base_mt5_path
         self.root_path = root_path
-
-        # Diretorio onde as instancias portaveis ficam
         self.instances_dir = os.path.join(root_path, 'mt5_instances')
-
-        # brokers: {key: data_dict} - todos os brokers configurados
         self.brokers = {}
-
-        # estado de processos e conexao
         self.mt5_processes = {}
-        self.connected_brokers = {}  # {key: True/False}
-
-        # Carregar brokers do config
+        self.connected_brokers = {}
         self._load_brokers()
-
         os.makedirs(self.instances_dir, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -114,7 +105,6 @@ class BrokerManager:
                 logger.error(f'Erro ao copiar base MT5 para {key}: {e}')
                 return None
 
-        # Garantir subpastas MQL5
         for subdir in ['MQL5/Experts', 'MQL5/Libraries', 'MQL5/Files', 'MQL5/Indicators', 'MQL5/Scripts']:
             os.makedirs(os.path.join(instance_path, subdir), exist_ok=True)
 
@@ -161,36 +151,47 @@ class BrokerManager:
             logger.warning('Nenhum EA encontrado em mt5_ea/')
 
     def create_mt5_config(self, key, data):
-        """Cria o config.ini dentro da instancia do MT5 para o broker."""
+        """
+        Cria o config.ini dentro da instancia MT5 para o broker.
+
+        Formato gerado (compativel com EPCopyFlow_MasterContext.mqh):
+
+            [EPCopyFlow]
+            MasterID=<key>
+            ProtocolVersion=1.0
+            Role=<master|slave>
+
+            [Ports]
+            MasterPort=<porta_zmq>
+        """
         path = os.path.join(self.instances_dir, key, 'MQL5', 'Files', 'config.ini')
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
-        base_port = int(data.get('push_port') or data.get('zmq_port') or 15555)
-        nl = chr(10)
+        # Porta ZMQ: prioriza push_port, depois zmq_port, senao default 15555
+        master_port = int(data.get('push_port') or data.get('zmq_port') or 15555)
+
+        # Role: 'master' ou 'slave' (default slave para seguranca)
+        role = str(data.get('role', 'slave')).lower()
+
         lines = [
-            '[ZMQ]',
-            'BrokerKey=' + str(key),
-            'Role=' + str(data.get('role', 'slave')),
-            'LotFactor=' + str(data.get('lot_factor', 1.0)),
+            '[EPCopyFlow]',
+            f'MasterID={key}',
+            'ProtocolVersion=1.0',
+            f'Role={role}',
+            '',
             '[Ports]',
-            'AdminPort=' + str(base_port),
-            'DataPort=' + str(base_port + 1),
-            'TradePort=' + str(base_port + 2),
-            'LivePort=' + str(base_port + 3),
-            'StrPort=' + str(base_port + 4),
-            '[Account]',
-            'Login=' + str(data.get('login', '')),
-            'Server=' + str(data.get('server', '')),
-            'Mode=' + str(data.get('mode', 'Hedge')),
-            'Type=' + str(data.get('type', 'Demo')),
+            f'MasterPort={master_port}',
         ]
 
         try:
             with open(path, 'w', encoding='utf-8') as f:
-                f.write(nl.join(lines) + nl)
-            logger.info(f'Config MT5 criado: {path}')
+                f.write('\n'.join(lines) + '\n')
+            logger.info(
+                f'Config MT5 criado: {path} '
+                f'[MasterID={key}, Role={role}, MasterPort={master_port}]'
+            )
         except Exception as e:
-            logger.error(f'Erro ao criar config MT5: {e}')
+            logger.error(f'Erro ao criar config MT5 ({path}): {e}')
 
     # ------------------------------------------------------------------
     # Conexao / Desconexao
@@ -200,14 +201,11 @@ class BrokerManager:
         """Inicia o MT5 portavel para o broker indicado."""
         if self.is_connected(key):
             return True
-
         data = self.brokers.get(key, {})
         exe = self.setup_portable_instance(key)
         if not exe:
             return False
-
         self.create_mt5_config(key, data)
-
         try:
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -234,19 +232,14 @@ class BrokerManager:
             except Exception:
                 p.kill()
             del self.mt5_processes[key]
-
         self.connected_brokers[key] = False
         logger.info(f'MT5 encerrado para {key}')
         return True
 
     def disconnect_all_brokers(self):
-        """
-        Encerra todos os processos MT5 abertos.
-        Chamado tipicamente no shutdown do aplicativo.
-        """
+        """Encerra todos os processos MT5 abertos."""
         logger.info('Encerrando todos os processos MT5...')
-        keys_to_disconnect = list(self.mt5_processes.keys())  # copia para evitar modificacao durante iteracao
-        for key in keys_to_disconnect:
+        for key in list(self.mt5_processes.keys()):
             self.disconnect_broker(key)
         logger.info('Todos os processos MT5 foram encerrados.')
 
@@ -280,13 +273,10 @@ class BrokerManager:
         if not login:
             logger.error('add_broker: campo login e obrigatorio')
             return False
-
         key = login
         self.brokers[key] = dict(kwargs)
-
         if key not in self.connected_brokers:
             self.connected_brokers[key] = False
-
         self._save_broker_to_config(key, self.brokers[key])
         logger.info(f'Broker adicionado: {key}')
         return True
@@ -299,7 +289,6 @@ class BrokerManager:
         if key not in self.brokers:
             logger.error(f'modify_broker: broker {key} nao encontrado')
             return False
-
         self.brokers[key].update(kwargs)
         self._save_broker_to_config(key, self.brokers[key])
         logger.info(f'Broker modificado: {key}')
@@ -309,7 +298,6 @@ class BrokerManager:
         """Remove um broker (desconecta se necessario) e apaga do config.ini."""
         if self.is_connected(key):
             self.disconnect_broker(key)
-
         self.brokers.pop(key, None)
         self.connected_brokers.pop(key, None)
         self._remove_broker_from_config(key)
