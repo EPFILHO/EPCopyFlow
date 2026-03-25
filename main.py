@@ -6,8 +6,6 @@ import sys
 import os
 import logging
 import asyncio
-asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
 import qasync
 from PySide6.QtWidgets import QApplication
 
@@ -100,9 +98,14 @@ class EPCopyFlowApp:
 
 if __name__ == "__main__":
     try:
+        # Python 3.14+: força SelectorEventLoop antes de criar o QEventLoop
+        # para compatibilidade com ZMQ no Windows (sem usar policy deprecada)
+        asyncio.DefaultEventLoopPolicy = asyncio.DefaultEventLoopPolicy
+        _selector_loop = asyncio.SelectorEventLoop()
+        asyncio.set_event_loop(_selector_loop)
+
         app = QApplication(sys.argv)
-        selector_loop = asyncio.SelectorEventLoop()
-        loop = qasync.QEventLoop(app, loop=selector_loop)
+        loop = qasync.QEventLoop(app)
         asyncio.set_event_loop(loop)
 
         epcopyflow = EPCopyFlowApp()
