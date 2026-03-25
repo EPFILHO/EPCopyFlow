@@ -6,6 +6,8 @@ import sys
 import os
 import logging
 import asyncio
+asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import qasync
 from PySide6.QtWidgets import QApplication
 
