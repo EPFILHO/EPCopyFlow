@@ -121,34 +121,47 @@ class BrokerManager:
         logger.info(f'Instancia MT5 preparada em: {instance_path}')
         return executable
 
-    def copy_dlls(self, instance_path):
-        """Copia DLLs para a pasta Libraries da instancia."""
-        src = os.path.join(self.root_path, 'dlls')
-        dst = os.path.join(instance_path, 'MQL5', 'Libraries')
-        os.makedirs(dst, exist_ok=True)
-        if os.path.exists(src):
-            for f in os.listdir(src):
-                if f.lower().endswith('.dll'):
-                    shutil.copy2(os.path.join(src, f), dst)
-            logger.info(f'DLLs copiadas para {dst}')
+def copy_dlls(self, instance_path):
+    src = os.path.join(self.root_path, 'dlls')
+    dst = os.path.join(instance_path, 'MQL5', 'Libraries')
+    os.makedirs(dst, exist_ok=True)
+    if not os.path.exists(src):
+        return
+    for f in os.listdir(src):
+        if not f.lower().endswith('.dll'):
+            continue
+        src_file = os.path.join(src, f)
+        dst_file = os.path.join(dst, f)
+        if self._should_copy(src_file, dst_file):
+            shutil.copy2(src_file, dst_file)
+            logger.info(f'DLL copiada: {f}')
+        else:
+            logger.debug(f'DLL ja atualizada, pulando: {f}')
 
-    def copy_expert(self, instance_path):
-        """Copia o EA para a pasta Experts da instancia."""
-        possible_names = ['EPCopyBridge.ex5', 'ZmqTraderBridge.ex5']
-        dst_folder = os.path.join(instance_path, 'MQL5', 'Experts')
-        os.makedirs(dst_folder, exist_ok=True)
-        found = False
-        for name in possible_names:
-            src = os.path.join(self.root_path, 'mt5_ea', name)
-            if not os.path.exists(src):
-                src = os.path.join(self.root_path, 'mt5_ea', 'ZmqTraderBridge', name)
-            if os.path.exists(src):
-                shutil.copy2(src, os.path.join(dst_folder, 'EPCopyBridge.ex5'))
+def copy_expert(self, instance_path):
+    possible_names = ['EPCopyBridge.ex5', 'ZmqTraderBridge.ex5']
+    dst_folder = os.path.join(instance_path, 'MQL5', 'Experts')
+    os.makedirs(dst_folder, exist_ok=True)
+    for name in possible_names:
+        src = os.path.join(self.root_path, 'mt5_ea', name)
+        if not os.path.exists(src):
+            src = os.path.join(self.root_path, 'mt5_ea', 'ZmqTraderBridge', name)
+        if os.path.exists(src):
+            dst = os.path.join(dst_folder, 'EPCopyBridge.ex5')
+            if self._should_copy(src, dst):
+                shutil.copy2(src, dst)
                 logger.info(f'EA {name} copiado como EPCopyBridge.ex5')
-                found = True
-                break
-        if not found:
-            logger.warning('Nenhum EA encontrado em mt5_ea/')
+            else:
+                logger.debug(f'EA ja atualizado, pulando: {name}')
+            return
+    logger.warning('Nenhum EA encontrado em mt5_ea/')
+
+def _should_copy(self, src: str, dst: str) -> bool:
+    """Retorna True se o arquivo destino nao existe ou tem tamanho diferente."""
+    if not os.path.exists(dst):
+        return True
+    return os.path.getsize(src) != os.path.getsize(dst)
+
 
     def create_mt5_config(self, key, data):
         """
