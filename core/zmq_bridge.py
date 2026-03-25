@@ -1,315 +1,161 @@
-# core/zmq_bridge.py
-# EPCopyFlow - Versao 2.0.0
-# Responsabilidade: Gerenciar EXCLUSIVAMENTE os sockets ZMQ entre Python, master e slaves.
-# Nao contem logica de negocio — apenas transporte de mensagens.
-#
-# Arquitetura de sockets:
-#   - 1 socket DEALER por instancia MT5 (master e slaves usam o mesmo padrao)
-#   - Master: Python ESCUTA (recv) eventos de trade vindos do EA
-#   - Slaves: Python ENVIA (send) ordens para o EA executar
-#   - Protocolo: JSON em texto puro (UTF-8)
-
 import asyncio
-import json
-import logging
-
 import zmq
 import zmq.asyncio
-from PySide6.QtCore import QObject, Signal
-
-from core.config_manager import ConfigManager
+import logging
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
 
-class ZmqBridge(QObject):
+class ZmqBridge:
     """
-    Gerenciador de sockets ZMQ para o EPCopyFlow.
-
-    Sinais emitidos (para uso pelo CopyEngine e GUI):
-        master_event_received(dict)          : evento de trade bruto do master
-        slave_ack_received(str, dict)        : (broker_key, resposta do slave)
-        connection_changed(str, str, bool)   : (broker_key, role, connected)
-        bridge_log(str, str)                 : (level, mensagem) para o log da GUI
+    Gerencia conexoes ZMQ para cada broker cadastrado.
+    - Master: socket SUB (recebe eventos do EA Master via PUB)
+    - Slave:  socket PUB (envia comandos para o EA Slave via SUB)
     """
 
-    master_event_received = Signal(dict)
-    slave_ack_received = Signal(str, dict)
-    connection_changed = Signal(str, str, bool)
-    bridge_log = Signal(str, str)
-
-    # -------------------------------------------------------------------------
-    # Bloco 1 - Inicializacao
-    # -------------------------------------------------------------------------
-    def __init__(self, config: ConfigManager, parent=None):
-        super().__init__(parent)
-        self._config = config
-        self._host = config.get('CopyEngine', 'host', fallback='127.0.0.1')
-        self._recv_timeout = config.getint('CopyEngine', 'recv_timeout_ms', fallback=1000)
-        self._reconnect_interval = config.getint('CopyEngine', 'reconnect_interval_s', fallback=3)
-
-        self._context: zmq.asyncio.Context | None = None
+    def __init__(self, context: zmq.asyncio.Context = None):
+        self.context = context or zmq.asyncio.Context()
+        self._sockets: dict[str, zmq.asyncio.Socket] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._callbacks: dict[str, list[Callable]] = {}
         self._running = False
 
-        # broker_key -> {'socket': zmq.Socket, 'role': 'master'|'slave', 'port': int}
-        self._sockets: dict[str, dict] = {}
+    # ------------------------------------------------------------------
+    # Ciclo de vida
+    # ------------------------------------------------------------------
 
-        # broker_key -> asyncio.Task (loop de recepcao)
-        self._recv_tasks: dict[str, asyncio.Task] = {}
-
-        logger.debug("ZmqBridge inicializado. Host: %s", self._host)
-
-    # -------------------------------------------------------------------------
-    # Bloco 2 - Ciclo de vida (start / stop)
-    # -------------------------------------------------------------------------
-    async def start(self, brokers: dict) -> None:
+    async def start(self, brokers: dict):
         """
-        Inicia o bridge: cria o contexto ZMQ e conecta todos os brokers ativos.
-
-        Args:
-            brokers (dict): dicionario completo do brokers.json, ex:
-                {
-                  'XP-12345': {'role': 'master', 'zmq_port': 15555, ...},
-                  'RICO-67890': {'role': 'slave',  'zmq_port': 15556, 'lot_factor': 1.0, ...}
-                }
+        Inicializa sockets para todos os brokers cadastrados.
+        brokers: {key: data} vindo do BrokerManager.get_brokers()
         """
-        if self._running:
-            logger.warning("ZmqBridge.start() chamado mas bridge ja esta rodando.")
-            return
-
-        self._context = zmq.asyncio.Context()
         self._running = True
-        logger.info("ZmqBridge iniciado.")
-        self.bridge_log.emit('INFO', 'ZmqBridge iniciado.')
-
         for key, data in brokers.items():
-            role = data.get('role', 'slave')
-            port = data.get('zmq_port')
-            if port:
-                await self.connect_peer(key, role, int(port))
+            await self._connect_broker(key, data)
+        logger.info(f'ZmqBridge iniciado com {len(brokers)} broker(s).')
 
-    async def stop(self) -> None:
-        """Encerra todos os sockets e o contexto ZMQ de forma limpa."""
-        if not self._running:
-            return
+    async def stop(self):
+        """Encerra todos os sockets e tasks."""
         self._running = False
-
-        # Cancela todos os loops de recepcao
-        for key, task in list(self._recv_tasks.items()):
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-        self._recv_tasks.clear()
-
-        # Fecha os sockets
-        for key, peer in list(self._sockets.items()):
+        for key in list(self._tasks.keys()):
+            self._tasks[key].cancel()
             try:
-                peer['socket'].close(linger=0)
-            except Exception as e:
-                logger.warning("Erro ao fechar socket de %s: %s", key, e)
-        self._sockets.clear()
-
-        if self._context:
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(None, self._context.term)
-        self._context = None
-
-        logger.info("ZmqBridge encerrado.")
-        self.bridge_log.emit('INFO', 'ZmqBridge encerrado.')
-
-    # -------------------------------------------------------------------------
-    # Bloco 3 - Gerenciamento de peers (connect / disconnect)
-    # -------------------------------------------------------------------------
-    async def connect_peer(self, broker_key: str, role: str, port: int) -> bool:
-        """
-        Conecta um peer (master ou slave) via socket DEALER.
-
-        - Master: socket em modo RECV (escuta passiva)
-        - Slave:  socket em modo SEND (envio de ordens)
-
-        Args:
-            broker_key (str): chave unica do broker (ex: 'XP-12345')
-            role (str): 'master' ou 'slave'
-            port (int): porta ZMQ deste broker
-
-        Returns:
-            bool: True se conectado com sucesso
-        """
-        if not self._running or not self._context:
-            logger.error("connect_peer chamado antes de start().")
-            return False
-
-        if broker_key in self._sockets:
-            logger.warning("Peer %s ja esta conectado.", broker_key)
-            return True
-
-        try:
-            sock = self._context.socket(zmq.DEALER)
-            sock.setsockopt(zmq.RCVTIMEO, self._recv_timeout)
-            sock.setsockopt(zmq.LINGER, 0)
-            addr = f"tcp://{self._host}:{port}"
-            sock.connect(addr)
-
-            self._sockets[broker_key] = {'socket': sock, 'role': role, 'port': port}
-            logger.info("Peer conectado: %s (%s) em %s", broker_key, role, addr)
-            self.bridge_log.emit('INFO', f"Conectado: {broker_key} ({role}) porta {port}")
-            self.connection_changed.emit(broker_key, role, True)
-
-            # Inicia loop de recepcao para TODOS os peers
-            # (slaves tambem podem enviar ACK/NACK de volta)
-            task = asyncio.create_task(
-                self._recv_loop(broker_key),
-                name=f"recv_{broker_key}"
-            )
-            self._recv_tasks[broker_key] = task
-            return True
-
-        except Exception as e:
-            logger.error("Falha ao conectar peer %s: %s", broker_key, e)
-            self.bridge_log.emit('ERROR', f"Falha ao conectar {broker_key}: {e}")
-            return False
-
-    async def disconnect_peer(self, broker_key: str) -> None:
-        """Desconecta um peer e cancela seu loop de recepcao."""
-        task = self._recv_tasks.pop(broker_key, None)
-        if task and not task.done():
-            task.cancel()
-            try:
-                await task
+                await self._tasks[key]
             except asyncio.CancelledError:
                 pass
-
-        peer = self._sockets.pop(broker_key, None)
-        if peer:
+        for key, sock in self._sockets.items():
             try:
-                peer['socket'].close(linger=0)
+                sock.close()
             except Exception:
                 pass
-            role = peer.get('role', 'slave')
-            logger.info("Peer desconectado: %s", broker_key)
-            self.bridge_log.emit('INFO', f"Desconectado: {broker_key}")
-            self.connection_changed.emit(broker_key, role, False)
+        self._sockets.clear()
+        self._tasks.clear()
+        logger.info('ZmqBridge encerrado.')
 
-    # -------------------------------------------------------------------------
-    # Bloco 4 - Envio de mensagens
-    # -------------------------------------------------------------------------
-    async def send_to_slave(self, broker_key: str, message: dict) -> bool:
-        """
-        Envia um comando JSON para um slave especifico.
+    # ------------------------------------------------------------------
+    # Conexao por broker
+    # ------------------------------------------------------------------
 
-        Args:
-            broker_key (str): chave do slave
-            message (dict): payload a enviar
+    async def _connect_broker(self, key: str, data: dict):
+        """Cria o socket correto (SUB ou PUB) conforme o Role do broker."""
+        role = str(data.get('role', 'slave')).lower()
+        port = int(data.get('push_port') or data.get('zmq_port') or 0)
 
-        Returns:
-            bool: True se enviado com sucesso
-        """
-        peer = self._sockets.get(broker_key)
-        if not peer:
-            logger.error("send_to_slave: peer '%s' nao encontrado.", broker_key)
-            return False
-        if peer.get('role') != 'slave':
-            logger.warning("send_to_slave: '%s' nao e um slave.", broker_key)
-            return False
-        return await self._send(peer['socket'], broker_key, message)
+        if not port:
+            logger.error(f'[{key}] Porta ZMQ nao definida, broker ignorado.')
+            return
 
-    async def send_to_all_slaves(self, message: dict) -> dict[str, bool]:
-        """
-        Envia um comando para TODOS os slaves conectados.
+        address = f'tcp://127.0.0.1:{port}'
 
-        Returns:
-            dict broker_key -> bool (sucesso por slave)
-        """
-        results = {}
-        for key, peer in self._sockets.items():
-            if peer.get('role') == 'slave':
-                results[key] = await self._send(peer['socket'], key, message)
-        return results
-
-    async def _send(self, sock: zmq.asyncio.Socket, broker_key: str, message: dict) -> bool:
-        """Serializacao e envio efetivo de uma mensagem JSON."""
         try:
-            payload = json.dumps(message, ensure_ascii=False).encode('utf-8')
-            await sock.send(payload)
-            logger.debug("Enviado para %s: %s", broker_key, message)
-            return True
-        except Exception as e:
-            logger.error("Erro ao enviar para %s: %s", broker_key, e)
-            self.bridge_log.emit('ERROR', f"Erro de envio para {broker_key}: {e}")
-            return False
+            if role == 'master':
+                sock = self.context.socket(zmq.SUB)
+                sock.connect(address)
+                sock.setsockopt_string(zmq.SUBSCRIBE, '')  # recebe tudo
+                self._sockets[key] = sock
+                self._tasks[key] = asyncio.create_task(
+                    self._recv_loop(key, sock), name=f'zmq_recv_{key}'
+                )
+                logger.info(f'[{key}] SUB conectado em {address} (master)')
 
-    # -------------------------------------------------------------------------
-    # Bloco 5 - Loop de recepcao
-    # -------------------------------------------------------------------------
-    async def _recv_loop(self, broker_key: str) -> None:
-        """
-        Loop asyncio que fica escutando mensagens de um peer.
-        Para o master: emite master_event_received com o dict JSON.
-        Para os slaves: emite slave_ack_received com (broker_key, dict).
-        Reconecta automaticamente se o socket falhar.
-        """
-        logger.debug("Loop de recepcao iniciado para: %s", broker_key)
-        while self._running and broker_key in self._sockets:
-            peer = self._sockets.get(broker_key)
-            if not peer:
-                break
-            sock = peer['socket']
-            role = peer.get('role', 'slave')
+            else:  # slave
+                sock = self.context.socket(zmq.PUB)
+                sock.bind(address)
+                self._sockets[key] = sock
+                logger.info(f'[{key}] PUB bind em {address} (slave)')
+
+        except Exception as e:
+            logger.error(f'[{key}] Erro ao criar socket ZMQ: {e}')
+
+    # ------------------------------------------------------------------
+    # Loop de recepcao (master)
+    # ------------------------------------------------------------------
+
+    async def _recv_loop(self, key: str, sock: zmq.asyncio.Socket):
+        """Recebe mensagens do EA Master e dispara callbacks registrados."""
+        logger.info(f'[{key}] Loop de recepcao iniciado.')
+        while self._running:
             try:
-                raw = await sock.recv()
-                try:
-                    data = json.loads(raw.decode('utf-8'))
-                    logger.debug("Recebido de %s (%s): %s", broker_key, role, data)
-                    if role == 'master':
-                        self.master_event_received.emit(data)
-                    else:
-                        self.slave_ack_received.emit(broker_key, data)
-                except json.JSONDecodeError as e:
-                    logger.warning("JSON invalido de %s: %s | raw: %s", broker_key, e, raw)
-            except zmq.Again:
-                # Timeout normal — nao e erro, so nao chegou mensagem no periodo
-                await asyncio.sleep(0)
+                raw = await sock.recv_string()
+                logger.debug(f'[{key}] Recebido: {raw}')
+                for cb in self._callbacks.get(key, []):
+                    try:
+                        await cb(key, raw)
+                    except Exception as e:
+                        logger.error(f'[{key}] Erro no callback: {e}')
             except asyncio.CancelledError:
-                logger.debug("Loop de recepcao cancelado para: %s", broker_key)
                 break
             except Exception as e:
-                if self._running:
-                    logger.error("Erro no loop de recepcao de %s: %s", broker_key, e)
-                    self.bridge_log.emit('ERROR', f"Erro de recepcao {broker_key}: {e}")
-                    # Aguarda antes de tentar continuar
-                    await asyncio.sleep(self._reconnect_interval)
+                logger.error(f'[{key}] Erro no recv_loop: {e}')
+                await asyncio.sleep(1)
+        logger.info(f'[{key}] Loop de recepcao encerrado.')
 
-        logger.debug("Loop de recepcao encerrado para: %s", broker_key)
+    # ------------------------------------------------------------------
+    # Envio (slave)
+    # ------------------------------------------------------------------
 
-    # -------------------------------------------------------------------------
-    # Bloco 6 - Consultas de estado
-    # -------------------------------------------------------------------------
-    def get_connected_peers(self) -> dict[str, dict]:
+    async def send(self, key: str, message: str) -> bool:
         """
-        Retorna info dos peers atualmente conectados.
-
-        Returns:
-            dict broker_key -> {'role': str, 'port': int}
+        Envia uma mensagem JSON para um EA Slave.
+        Retorna True se enviado com sucesso.
         """
-        return {
-            key: {'role': p['role'], 'port': p['port']}
-            for key, p in self._sockets.items()
-        }
+        sock = self._sockets.get(key)
+        if not sock:
+            logger.error(f'[{key}] Socket nao encontrado para envio.')
+            return False
+        try:
+            await sock.send_string(message)
+            logger.debug(f'[{key}] Enviado: {message}')
+            return True
+        except Exception as e:
+            logger.error(f'[{key}] Erro ao enviar mensagem: {e}')
+            return False
 
-    def is_connected(self, broker_key: str) -> bool:
-        """Verifica se um peer especifico esta conectado."""
-        return broker_key in self._sockets
+    # ------------------------------------------------------------------
+    # Callbacks
+    # ------------------------------------------------------------------
 
-    def get_master_key(self) -> str | None:
-        """Retorna a chave do peer master conectado, ou None se nao houver."""
-        for key, peer in self._sockets.items():
-            if peer.get('role') == 'master':
-                return key
-        return None
+    def register_callback(self, key: str, callback: Callable):
+        """
+        Registra um callback async para mensagens recebidas de um master.
+        Assinatura: async def callback(key: str, raw_message: str)
+        """
+        if key not in self._callbacks:
+            self._callbacks[key] = []
+        self._callbacks[key].append(callback)
+        logger.info(f'[{key}] Callback registrado: {callback.__name__}')
 
-    def get_slave_keys(self) -> list[str]:
-        """Retorna lista de chaves dos slaves conectados."""
-        return [k for k, p in self._sockets.items() if p.get('role') == 'slave']
+    def unregister_callbacks(self, key: str):
+        """Remove todos os callbacks de um broker."""
+        self._callbacks.pop(key, None)
+
+    # ------------------------------------------------------------------
+    # Consultas
+    # ------------------------------------------------------------------
+
+    def is_connected(self, key: str) -> bool:
+        return key in self._sockets
+
+    def get_connected_keys(self) -> list[str]:
+        return list(self._sockets.keys())
