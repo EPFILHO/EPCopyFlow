@@ -298,12 +298,12 @@ class BrokerManager:
         Retorna True em caso de sucesso.
         """
         login       = str(kwargs.get('login', '')).strip()
-        broker_name = str(kwargs.get('name', '')).strip().replace(' ', '_')
+        broker_name = str(kwargs.get('broker_name', '')).strip().replace(' ', '_')
         if not login:
             logger.error('add_broker: campo login e obrigatorio')
             return False
         if not broker_name:
-            logger.error('add_broker: campo name e obrigatorio')
+            logger.error('add_broker: campo broker_name e obrigatorio')
             return False
         key = f'{broker_name}-{login}'
         self.brokers[key] = dict(kwargs)
