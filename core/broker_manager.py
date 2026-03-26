@@ -298,7 +298,7 @@ class BrokerManager:
         Retorna True em caso de sucesso.
         """
         login       = str(kwargs.get('login', '')).strip()
-        broker_name = str(kwargs.get('broker_name', '')).strip().replace(' ', '_')
+        broker_name = str(kwargs.get('broker_name', '')).strip().replace(' ', '_').upper()
         if not login:
             logger.error('add_broker: campo login e obrigatorio')
             return False
