@@ -114,13 +114,6 @@ class BrokerManager:
         role = self.brokers.get(key, {}).get('role', 'slave')
         self.copy_expert(instance_path, role)
 
-        try:
-            import win32api
-            import win32con
-            win32api.SetFileAttributes(instance_path, win32con.FILE_ATTRIBUTE_HIDDEN)
-        except Exception:
-            pass
-
         logger.info(f'Instancia MT5 preparada em: {instance_path}')
         return executable
 
@@ -142,16 +135,16 @@ class BrokerManager:
                 logger.debug(f'DLL ja atualizada, pulando: {f}')
 
     def copy_expert(self, instance_path, role: str = 'slave'):
-        """Copia o EA correto (Master ou Slave) para a instancia MT5."""
         role = role.strip().lower()
         ea_name = 'EPCopyFlow_Master.ex5' if role == 'master' else 'EPCopyFlow_Slave.ex5'
-        src = os.path.join(self.root_path, 'mt5_ea', ea_name)
+        # Busca o .ex5 na instalacao base do MT5
+        src = os.path.join(self.base_mt5_path, 'MQL5', 'Experts', ea_name)
         dst_folder = os.path.join(instance_path, 'MQL5', 'Experts')
         os.makedirs(dst_folder, exist_ok=True)
         dst = os.path.join(dst_folder, ea_name)
         if not os.path.exists(src):
             logger.warning(f'EA nao encontrado: {src}')
-            return
+        return
         if self._should_copy(src, dst):
             shutil.copy2(src, dst)
             logger.info(f'EA copiado: {ea_name} → {dst_folder}')
