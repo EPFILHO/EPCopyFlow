@@ -105,10 +105,12 @@ class BrokerManager:
                 logger.error(f'Erro ao copiar base MT5 para {key}: {e}')
                 return None
 
-        for subdir in ['MQL5/Experts', 'MQL5/Libraries', 'MQL5/Files', 'MQL5/Indicators', 'MQL5/Scripts']:
+        for subdir in ['MQL5/Experts', 'MQL5/Libraries', 'MQL5/Files',
+                       'MQL5/Indicators', 'MQL5/Scripts']:
             os.makedirs(os.path.join(instance_path, subdir), exist_ok=True)
 
         self.copy_dlls(instance_path)
+
         role = self.brokers.get(key, {}).get('role', 'slave')
         self.copy_expert(instance_path, role)
 
@@ -149,7 +151,7 @@ class BrokerManager:
         dst = os.path.join(dst_folder, ea_name)
         if not os.path.exists(src):
             logger.warning(f'EA nao encontrado: {src}')
-        return
+            return
         if self._should_copy(src, dst):
             shutil.copy2(src, dst)
             logger.info(f'EA copiado: {ea_name} → {dst_folder}')
@@ -164,43 +166,67 @@ class BrokerManager:
 
     def create_mt5_config(self, key, data):
         """
-        Cria o config.ini dentro da instancia MT5 para o broker.
+        Cria o epcopyflow.cfg dentro de MQL5/Files/ da instancia MT5.
 
-        Formato gerado (compativel com EPCopyFlow_MasterContext.mqh):
-
+        Formato Master:
             [EPCopyFlow]
-            MasterID=<key>
+            MasterId=<key>
             ProtocolVersion=1.0
-            Role=<master|slave>
-
+            Role=master
             [Ports]
-            MasterPort=<porta_zmq>
+            TradePort=<port>
+
+        Formato Slave:
+            [EPCopyFlow]
+            SlaveId=<key>
+            MasterId=<master_id>
+            ProtocolVersion=1.0
+            Role=slave
+            [Ports]
+            TradePort=<port>
+            HeartbeatPort=<port>
         """
-        path = os.path.join(self.instances_dir, key, 'MQL5', 'Files', 'config.ini')
+        path = os.path.join(self.instances_dir, key, 'MQL5', 'Files', 'epcopyflow.cfg')
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
-        master_port = int(data.get('push_port') or data.get('zmq_port') or 15555)
         role = str(data.get('role', 'slave')).lower()
 
-        lines = [
-            '[EPCopyFlow]',
-            f'MasterID={key}',
-            'ProtocolVersion=1.0',
-            f'Role={role}',
-            '',
-            '[Ports]',
-            f'MasterPort={master_port}',
-        ]
+        if role == 'master':
+            trade_port = int(data.get('push_port') or data.get('zmq_port') or 15560)
+            lines = [
+                '[EPCopyFlow]',
+                f'MasterId={key}',
+                'ProtocolVersion=1.0',
+                'Role=master',
+                '',
+                '[Ports]',
+                f'TradePort={trade_port}',
+            ]
+            log_info = f'MasterId={key}, TradePort={trade_port}'
+        else:
+            trade_port     = int(data.get('trade_port')     or data.get('push_port') or 15556)
+            heartbeat_port = int(data.get('heartbeat_port') or data.get('sub_port')  or 15557)
+            master_id      = str(data.get('master_id', 'MASTER_1'))
+            lines = [
+                '[EPCopyFlow]',
+                f'SlaveId={key}',
+                f'MasterId={master_id}',
+                'ProtocolVersion=1.0',
+                'Role=slave',
+                '',
+                '[Ports]',
+                f'TradePort={trade_port}',
+                f'HeartbeatPort={heartbeat_port}',
+            ]
+            log_info = (f'SlaveId={key}, MasterId={master_id}, '
+                        f'TradePort={trade_port}, HeartbeatPort={heartbeat_port}')
 
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(lines) + '\n')
-            logger.info(
-                f'Config MT5 criado: {path} '
-                f'[MasterID={key}, Role={role}, MasterPort={master_port}]'
-            )
+            logger.info(f'epcopyflow.cfg criado: {path} [{log_info}]')
         except Exception as e:
-            logger.error(f'Erro ao criar config MT5 ({path}): {e}')
+            logger.error(f'Erro ao criar epcopyflow.cfg ({path}): {e}')
 
     # ------------------------------------------------------------------
     # Conexao / Desconexao
@@ -275,14 +301,18 @@ class BrokerManager:
     def add_broker(self, **kwargs):
         """
         Adiciona um broker em runtime e persiste no config.ini.
-        O 'key' e derivado do campo 'login' (obrigatorio).
+        A 'key' e derivada como BROKER-LOGIN (ex: 'XM-116486').
         Retorna True em caso de sucesso.
         """
-        login = kwargs.get('login', '').strip()
+        login       = str(kwargs.get('login', '')).strip()
+        broker_name = str(kwargs.get('name', '')).strip().replace(' ', '_')
         if not login:
             logger.error('add_broker: campo login e obrigatorio')
             return False
-        key = login
+        if not broker_name:
+            logger.error('add_broker: campo name e obrigatorio')
+            return False
+        key = f'{broker_name}-{login}'
         self.brokers[key] = dict(kwargs)
         if key not in self.connected_brokers:
             self.connected_brokers[key] = False
@@ -304,9 +334,17 @@ class BrokerManager:
         return True
 
     def remove_broker(self, key):
-        """Remove um broker (desconecta se necessario) e apaga do config.ini."""
+        """Remove um broker (desconecta, apaga diretorio e config)."""
         if self.is_connected(key):
             self.disconnect_broker(key)
+        # Apaga o diretorio da instancia portavel
+        instance_path = os.path.join(self.instances_dir, key)
+        if os.path.exists(instance_path):
+            try:
+                shutil.rmtree(instance_path)
+                logger.info(f'Diretorio removido: {instance_path}')
+            except Exception as e:
+                logger.error(f'Erro ao remover diretorio {instance_path}: {e}')
         self.brokers.pop(key, None)
         self.connected_brokers.pop(key, None)
         self._remove_broker_from_config(key)
