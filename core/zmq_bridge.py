@@ -1,8 +1,13 @@
+# +------------------------------------------------------------------+
+# |                                              core/zmq_bridge.py  |
+# |                                              EP Filho © 2026     |
+# |                  https://github.com/EPFILHO/EPCopyFlow           |
+# +------------------------------------------------------------------+
 import asyncio
 import zmq
 import zmq.asyncio
 import logging
-from typing import Callable, Optional
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -10,21 +15,24 @@ logger = logging.getLogger(__name__)
 class ZmqBridge:
     """
     Gerencia conexoes ZMQ para cada broker cadastrado.
-    - Master: socket SUB (recebe eventos do EA Master via PUB)
-    - Slave:  socket PUB (envia comandos para o EA Slave via SUB)
+
+    Padrão de sockets:
+      - Master → Python : PULL bind()  (recebe eventos do EA Master via PUSH)
+      - Python → Slaves : PUB  bind()  (envia comandos para EA Slaves via SUB)
+      - Slave  → Python : PULL bind()  (recebe heartbeat do EA Slave via PUSH)
     """
 
     def __init__(self, context: zmq.asyncio.Context = None):
-        self.context = context or zmq.asyncio.Context()
-        self._sockets: dict[str, zmq.asyncio.Socket] = {}
-        self._tasks: dict[str, asyncio.Task] = {}
-        self._callbacks: dict[str, list[Callable]] = {}
+        self.context   = context or zmq.asyncio.Context()
+        self._cmd_sockets:  dict[str, zmq.asyncio.Socket] = {}  # PUB → Slave (comandos)
+        self._pull_sockets: dict[str, zmq.asyncio.Socket] = {}  # PULL ← Master ou Slave HB
+        self._tasks:        dict[str, asyncio.Task]        = {}
+        self._callbacks:    dict[str, list[Callable]]      = {}
         self._running = False
 
     # ------------------------------------------------------------------
     # Ciclo de vida
     # ------------------------------------------------------------------
-
     async def start(self, brokers: dict):
         """
         Inicializa sockets para todos os brokers cadastrados.
@@ -38,62 +46,84 @@ class ZmqBridge:
     async def stop(self):
         """Encerra todos os sockets e tasks."""
         self._running = False
+
         for key in list(self._tasks.keys()):
             self._tasks[key].cancel()
             try:
                 await self._tasks[key]
             except asyncio.CancelledError:
                 pass
-        for key, sock in self._sockets.items():
-            try:
-                sock.close()
-            except Exception:
-                pass
-        self._sockets.clear()
+
+        for sock in list(self._cmd_sockets.values()):
+            try: sock.close()
+            except Exception: pass
+
+        for sock in list(self._pull_sockets.values()):
+            try: sock.close()
+            except Exception: pass
+
+        self._cmd_sockets.clear()
+        self._pull_sockets.clear()
         self._tasks.clear()
         logger.info('ZmqBridge encerrado.')
 
     # ------------------------------------------------------------------
     # Conexao por broker
     # ------------------------------------------------------------------
-
     async def _connect_broker(self, key: str, data: dict):
-        """Cria o socket correto (SUB ou PUB) conforme o Role do broker."""
-        role = str(data.get('role', 'slave')).lower()
-        port = int(data.get('push_port') or data.get('zmq_port') or 0)
+        """Cria os sockets corretos conforme o Role do broker."""
+        role       = str(data.get('role', 'slave')).lower()
+        trade_port = int(data.get('trade_port') or data.get('zmq_port') or 0)
 
-        if not port:
-            logger.error(f'[{key}] Porta ZMQ nao definida, broker ignorado.')
+        if not trade_port:
+            logger.error(f'[{key}] TradePort nao definida, broker ignorado.')
             return
-
-        address = f'tcp://127.0.0.1:{port}'
 
         try:
             if role == 'master':
-                sock = self.context.socket(zmq.SUB)
-                sock.connect(address)
-                sock.setsockopt_string(zmq.SUBSCRIBE, '')  # recebe tudo
-                self._sockets[key] = sock
+                # PULL bind — recebe eventos PUSH do EA Master
+                addr = f'tcp://127.0.0.1:{trade_port}'
+                sock = self.context.socket(zmq.PULL)
+                sock.bind(addr)
+                self._pull_sockets[key] = sock
                 self._tasks[key] = asyncio.create_task(
-                    self._recv_loop(key, sock), name=f'zmq_recv_{key}'
+                    self._recv_loop(key, sock),
+                    name=f'zmq_recv_{key}'
                 )
-                logger.info(f'[{key}] SUB conectado em {address} (master)')
+                logger.info(f'[{key}] PULL bind em {addr} (master)')
 
             else:  # slave
-                sock = self.context.socket(zmq.PUB)
-                sock.bind(address)
-                self._sockets[key] = sock
-                logger.info(f'[{key}] PUB bind em {address} (slave)')
+                # PUB bind — envia comandos para SUB do EA Slave
+                addr_cmd = f'tcp://127.0.0.1:{trade_port}'
+                sock_pub  = self.context.socket(zmq.PUB)
+                sock_pub.bind(addr_cmd)
+                self._cmd_sockets[key] = sock_pub
+                logger.info(f'[{key}] PUB bind em {addr_cmd} (slave - comandos)')
+
+                # PULL bind — recebe heartbeat PUSH do EA Slave
+                hb_port = int(data.get('heartbeat_port') or 0)
+                if hb_port:
+                    addr_hb  = f'tcp://127.0.0.1:{hb_port}'
+                    sock_hb  = self.context.socket(zmq.PULL)
+                    sock_hb.bind(addr_hb)
+                    hb_key = f'{key}_hb'
+                    self._pull_sockets[hb_key] = sock_hb
+                    self._tasks[hb_key] = asyncio.create_task(
+                        self._recv_loop(hb_key, sock_hb),
+                        name=f'zmq_hb_{key}'
+                    )
+                    logger.info(f'[{key}] PULL bind em {addr_hb} (slave - heartbeat)')
+                else:
+                    logger.warning(f'[{key}] HeartbeatPort nao definida, heartbeat do Slave ignorado.')
 
         except Exception as e:
             logger.error(f'[{key}] Erro ao criar socket ZMQ: {e}')
 
     # ------------------------------------------------------------------
-    # Loop de recepcao (master)
+    # Loop de recepcao (master e slave heartbeat)
     # ------------------------------------------------------------------
-
     async def _recv_loop(self, key: str, sock: zmq.asyncio.Socket):
-        """Recebe mensagens do EA Master e dispara callbacks registrados."""
+        """Recebe mensagens e dispara callbacks registrados."""
         logger.info(f'[{key}] Loop de recepcao iniciado.')
         while self._running:
             try:
@@ -112,17 +142,16 @@ class ZmqBridge:
         logger.info(f'[{key}] Loop de recepcao encerrado.')
 
     # ------------------------------------------------------------------
-    # Envio (slave)
+    # Envio de comandos (Python → Slave)
     # ------------------------------------------------------------------
-
     async def send(self, key: str, message: str) -> bool:
         """
-        Envia uma mensagem JSON para um EA Slave.
+        Envia um comando JSON para um EA Slave pelo socket PUB.
         Retorna True se enviado com sucesso.
         """
-        sock = self._sockets.get(key)
+        sock = self._cmd_sockets.get(key)
         if not sock:
-            logger.error(f'[{key}] Socket nao encontrado para envio.')
+            logger.error(f'[{key}] Socket de comando nao encontrado.')
             return False
         try:
             await sock.send_string(message)
@@ -135,10 +164,12 @@ class ZmqBridge:
     # ------------------------------------------------------------------
     # Callbacks
     # ------------------------------------------------------------------
-
     def register_callback(self, key: str, callback: Callable):
         """
-        Registra um callback async para mensagens recebidas de um master.
+        Registra callback async para mensagens recebidas.
+        - Para master: key = broker_key (ex: 'FOTMARKETS-116486')
+        - Para heartbeat slave: key = broker_key + '_hb' (ex: 'FBS-105914573_hb')
+
         Assinatura: async def callback(key: str, raw_message: str)
         """
         if key not in self._callbacks:
@@ -153,9 +184,8 @@ class ZmqBridge:
     # ------------------------------------------------------------------
     # Consultas
     # ------------------------------------------------------------------
-
     def is_connected(self, key: str) -> bool:
-        return key in self._sockets
+        return key in self._cmd_sockets or key in self._pull_sockets
 
     def get_connected_keys(self) -> list[str]:
-        return list(self._sockets.keys())
+        return list(set(list(self._cmd_sockets.keys()) + list(self._pull_sockets.keys())))
