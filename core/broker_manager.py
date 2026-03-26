@@ -109,7 +109,8 @@ class BrokerManager:
             os.makedirs(os.path.join(instance_path, subdir), exist_ok=True)
 
         self.copy_dlls(instance_path)
-        self.copy_expert(instance_path)
+        role = self.brokers.get(key, {}).get('role', 'slave')
+        self.copy_expert(instance_path, role)
 
         try:
             import win32api
@@ -138,23 +139,22 @@ class BrokerManager:
             else:
                 logger.debug(f'DLL ja atualizada, pulando: {f}')
 
-    def copy_expert(self, instance_path):
-        possible_names = ['EPCopyBridge.ex5', 'ZmqTraderBridge.ex5']
+    def copy_expert(self, instance_path, role: str = 'slave'):
+        """Copia o EA correto (Master ou Slave) para a instancia MT5."""
+        role = role.strip().lower()
+        ea_name = 'EPCopyFlow_Master.ex5' if role == 'master' else 'EPCopyFlow_Slave.ex5'
+        src = os.path.join(self.root_path, 'mt5_ea', ea_name)
         dst_folder = os.path.join(instance_path, 'MQL5', 'Experts')
         os.makedirs(dst_folder, exist_ok=True)
-        for name in possible_names:
-            src = os.path.join(self.root_path, 'mt5_ea', name)
-            if not os.path.exists(src):
-                src = os.path.join(self.root_path, 'mt5_ea', 'ZmqTraderBridge', name)
-            if os.path.exists(src):
-                dst = os.path.join(dst_folder, 'EPCopyBridge.ex5')
-                if self._should_copy(src, dst):
-                    shutil.copy2(src, dst)
-                    logger.info(f'EA {name} copiado como EPCopyBridge.ex5')
-                else:
-                    logger.debug(f'EA ja atualizado, pulando: {name}')
-                return
-        logger.warning('Nenhum EA encontrado em mt5_ea/')
+        dst = os.path.join(dst_folder, ea_name)
+        if not os.path.exists(src):
+            logger.warning(f'EA nao encontrado: {src}')
+        return
+        if self._should_copy(src, dst):
+            shutil.copy2(src, dst)
+            logger.info(f'EA copiado: {ea_name} → {dst_folder}')
+        else:
+            logger.debug(f'EA ja atualizado, pulando: {ea_name}')
 
     def _should_copy(self, src: str, dst: str) -> bool:
         """Retorna True se o arquivo destino nao existe ou tem tamanho diferente."""
