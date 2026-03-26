@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//| EPCopyFlow_MasterZmq.mqh                                         |
-//| Wrapper ZMQ PUB unidirecional para o EA Master                   |
-//| Reutiliza padrao da lib Zmq/Zmq.mqh (mql5-zmq)                  |
-//| EPCopyFlow - EPFilho                                             |
+//|                                      EPCopyFlow_MasterZmq.mqh   |
+//|                 Wrapper ZMQ PUSH unidirecional para o EA Master  |
+//|         Reutiliza padrao da lib Zmq/Zmq.mqh (mql5-zmq)          |
+//|                                       EPCopyFlow - EPFilho       |
 //+------------------------------------------------------------------+
 #ifndef EPCOPYFLOW_MASTERZMQ_MQH
 #define EPCOPYFLOW_MASTERZMQ_MQH
@@ -10,14 +10,14 @@
 #include <Zmq/Zmq.mqh>
 
 //--- Variaveis de estado do socket ZMQ do Master
-Context  g_zmq_ctx;
-Socket   g_zmq_pub(g_zmq_ctx, ZMQ_PUB);  // PUB: envia eventos para Slaves
-bool     g_zmq_connected = false;
-string   g_zmq_bound_addr = "";
+Context g_zmq_ctx;
+Socket  g_zmq_push(g_zmq_ctx, ZMQ_PUSH); // PUSH: envia eventos para o Python
+bool    g_zmq_connected  = false;
+string  g_zmq_bound_addr = "";
 
 //+------------------------------------------------------------------+
-//| Conecta o socket PUB ao endereco (bind)                          |
-//| address: ex "tcp://127.0.0.1:5555" ou "tcp://*:5555"            |
+//| Conecta o socket PUSH ao endereco do Python (connect)            |
+//| address: ex "tcp://127.0.0.1:15560"                              |
 //+------------------------------------------------------------------+
 bool Master_ZmqConnect(const string address)
   {
@@ -27,36 +27,34 @@ bool Master_ZmqConnect(const string address)
       return true;
      }
 
-   // Para PUB no Master fazemos bind (o Master eh o publisher)
-   // Se o address vier com IP especifico (127.0.0.1) convertemos para wildcard
-   // para bindar corretamente; mantenha como veio do config.
-   if(!g_zmq_pub.bind(address))
+   // PUSH faz connect() — o Python (PULL) faz bind() e fica sempre de pe
+   if(!g_zmq_push.connect(address))
      {
-      PrintFormat("EPCopyFlow_Master ZMQ: Falha ao bind em %s, erro=%d",
+      PrintFormat("EPCopyFlow_Master ZMQ: Falha ao connect em %s, erro=%d",
                   address, GetLastError());
       return false;
      }
 
    g_zmq_connected  = true;
    g_zmq_bound_addr = address;
-   PrintFormat("EPCopyFlow_Master ZMQ: PUB socket bind OK em %s", address);
+   PrintFormat("EPCopyFlow_Master ZMQ: PUSH socket connect OK em %s", address);
    return true;
   }
 
 //+------------------------------------------------------------------+
-//| Desconecta o socket PUB                                          |
+//| Desconecta o socket PUSH                                         |
 //+------------------------------------------------------------------+
 void Master_ZmqDisconnect()
   {
    if(!g_zmq_connected) return;
-   g_zmq_pub.unbind(g_zmq_bound_addr);
+   g_zmq_push.disconnect(g_zmq_bound_addr);
    g_zmq_connected  = false;
    g_zmq_bound_addr = "";
    Print("EPCopyFlow_Master ZMQ: desconectado");
   }
 
 //+------------------------------------------------------------------+
-//| Envia payload JSON pelo socket PUB                               |
+//| Envia payload JSON pelo socket PUSH                              |
 //+------------------------------------------------------------------+
 bool Master_ZmqSend(const string &payload)
   {
@@ -65,9 +63,8 @@ bool Master_ZmqSend(const string &payload)
       Print("EPCopyFlow_Master ZMQ: tentativa de envio sem conexao");
       return false;
      }
-
    ZmqMsg msg(payload);
-   if(!g_zmq_pub.send(msg))
+   if(!g_zmq_push.send(msg))
      {
       PrintFormat("EPCopyFlow_Master ZMQ: falha ao enviar msg, erro=%d", GetLastError());
       return false;
