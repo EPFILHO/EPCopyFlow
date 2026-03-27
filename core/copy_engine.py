@@ -109,7 +109,7 @@ class CopyEngine:
     # Handlers — eventos do Master
     # ------------------------------------------------------------------
     async def _handle_open(self, key: str, msg: dict):
-        master_ticket = int(msg.get('ticket', 0))
+        master_ticket = int(msg.get('master_ticket') or msg.get('ticket') or 0)
         symbol        = msg.get('symbol', '')
         order_type    = msg.get('order_type', '')
         sl            = float(msg.get('sl', 0))
@@ -147,7 +147,7 @@ class CopyEngine:
                 logger.info(f'[{slave_key}] OPEN enviado: {symbol} vol={volume_slave}')
 
     async def _handle_close(self, key: str, msg: dict):
-        master_ticket = int(msg.get('ticket', 0))
+        master_ticket = int(msg.get('master_ticket') or msg.get('ticket') or 0)
         if not master_ticket:
             logger.error(f'[{key}] CLOSE sem ticket: {msg}')
             return
@@ -173,8 +173,8 @@ class CopyEngine:
         self._ticket_map.pop(master_ticket, None)
 
     async def _handle_partial_close(self, key: str, msg: dict):
-        master_ticket        = int(msg.get('ticket', 0))
-        volume_master_after  = float(msg.get('volume_after', 0))
+        master_ticket = int(msg.get('master_ticket') or msg.get('ticket') or 0)
+        volume_master_after = float(msg.get('volume_after', 0))
 
         if not master_ticket:
             logger.error(f'[{key}] PARTIAL_CLOSE sem ticket: {msg}')
@@ -202,7 +202,7 @@ class CopyEngine:
                 logger.info(f'[{slave_key}] PARTIAL_CLOSE enviado: slave_ticket={slave_ticket} vol_after={volume_slave_after}')
 
     async def _handle_modify(self, key: str, msg: dict):
-        master_ticket = int(msg.get('ticket', 0))
+        master_ticket = int(msg.get('master_ticket') or msg.get('ticket') or 0)
         sl            = float(msg.get('sl', 0))
         tp            = float(msg.get('tp', 0))
 
