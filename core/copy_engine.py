@@ -260,3 +260,8 @@ class CopyEngine:
         volume = steps * lot_step
         volume = max(min_lot, min(max_lot, volume))
         return round(volume, 2)
+
+    def stop(self):
+        """Encerra o CopyEngine (limpeza de estado)."""
+        self._ticket_map.clear()
+        logger.info('CopyEngine encerrado.')
