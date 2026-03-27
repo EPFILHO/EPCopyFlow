@@ -60,11 +60,11 @@ class CopyEngine:
 
         event = msg.get('event_type', '')
         handlers = {
-            'OPEN':        self._handle_open,
-            'CLOSE':       self._handle_close,
+            'OPEN':          self._handle_open,
+            'CLOSE':         self._handle_close,
             'PARTIAL_CLOSE': self._handle_partial_close,
-            'MODIFY_SLTP': self._handle_modify,
-            'HEARTBEAT':   self._handle_master_heartbeat,
+            'MODIFY_SLTP':   self._handle_modify,
+            'HEARTBEAT':     self._handle_master_heartbeat,
         }
         handler = handlers.get(event)
         if handler:
@@ -125,7 +125,7 @@ class CopyEngine:
         logger.info(f'[{key}] OPEN master_ticket={master_ticket} {symbol} {order_type} vol={volume_master}')
 
         for slave_key, slave_data in self._get_slaves():
-            lot_factor = float(slave_data.get('lot_factor', 1.0))
+            lot_factor   = float(slave_data.get('lot_factor', 1.0))
             volume_slave = self._calc_volume(volume_master, lot_factor, symbol)
             if volume_slave <= 0:
                 logger.warning(f'[{slave_key}] Volume calculado=0 para {symbol}, OPEN ignorado.')
@@ -141,7 +141,7 @@ class CopyEngine:
                 'sl':               sl,
                 'tp':               tp,
                 'comment':          comment,
-            })
+            }, separators=(',', ':'))
             sent = await self.zmq.send(slave_key, payload)
             if sent:
                 logger.info(f'[{slave_key}] OPEN enviado: {symbol} vol={volume_slave}')
@@ -165,7 +165,7 @@ class CopyEngine:
                 'event_type':       'CLOSE',
                 'master_ticket':    master_ticket,
                 'ticket':           slave_ticket,
-            })
+            }, separators=(',', ':'))
             sent = await self.zmq.send(slave_key, payload)
             if sent:
                 logger.info(f'[{slave_key}] CLOSE enviado: slave_ticket={slave_ticket}')
@@ -173,7 +173,7 @@ class CopyEngine:
         self._ticket_map.pop(master_ticket, None)
 
     async def _handle_partial_close(self, key: str, msg: dict):
-        master_ticket = int(msg.get('master_ticket') or msg.get('ticket') or 0)
+        master_ticket       = int(msg.get('master_ticket') or msg.get('ticket') or 0)
         volume_master_after = float(msg.get('volume_after', 0))
 
         if not master_ticket:
@@ -188,15 +188,15 @@ class CopyEngine:
             if not slave_ticket:
                 logger.warning(f'[{slave_key}] slave_ticket não encontrado para master={master_ticket}, PARTIAL_CLOSE ignorado.')
                 continue
-            lot_factor          = float(slave_data.get('lot_factor', 1.0))
-            volume_slave_after  = self._calc_volume(volume_master_after, lot_factor, msg.get('symbol', ''))
+            lot_factor         = float(slave_data.get('lot_factor', 1.0))
+            volume_slave_after = self._calc_volume(volume_master_after, lot_factor, msg.get('symbol', ''))
             payload = json.dumps({
                 'protocol_version': '1.0',
                 'event_type':       'PARTIAL_CLOSE',
                 'master_ticket':    master_ticket,
                 'ticket':           slave_ticket,
                 'volume_after':     volume_slave_after,
-            })
+            }, separators=(',', ':'))
             sent = await self.zmq.send(slave_key, payload)
             if sent:
                 logger.info(f'[{slave_key}] PARTIAL_CLOSE enviado: slave_ticket={slave_ticket} vol_after={volume_slave_after}')
@@ -225,7 +225,7 @@ class CopyEngine:
                 'ticket':           slave_ticket,
                 'sl':               sl,
                 'tp':               tp,
-            })
+            }, separators=(',', ':'))
             sent = await self.zmq.send(slave_key, payload)
             if sent:
                 logger.info(f'[{slave_key}] MODIFY_SLTP enviado: slave_ticket={slave_ticket} sl={sl} tp={tp}')
@@ -255,7 +255,7 @@ class CopyEngine:
         max_lot  = 500.0
         lot_step = 0.01
 
-        raw = volume_master * lot_factor
+        raw    = volume_master * lot_factor
         steps  = math.floor(raw / lot_step)
         volume = steps * lot_step
         volume = max(min_lot, min(max_lot, volume))
