@@ -40,11 +40,6 @@ class EPCopyFlowApp:
         self.zmq_bridge = ZmqBridge()
         self.copy_engine = CopyEngine(self.zmq_bridge, self.broker_manager)
 
-        # Registra callback para todos os brokers master cadastrados
-        for key, data in self.broker_manager.get_brokers().items():
-            if str(data.get('role', 'slave')).lower() == 'master':
-                self.zmq_bridge.register_callback(key, self.copy_engine.on_master_message)
-        
         # 3. Watchdog: monitora processos MT5 e reinicia em caso de fechamento acidental
         self.mt5_monitor = MT5ProcessMonitor(
             broker_manager=self.broker_manager,
@@ -60,13 +55,21 @@ class EPCopyFlowApp:
     async def start(self):
         """Inicia o bridge, o watchdog e mostra a janela."""
         self.window.show()
-        
+
         # Iniciar watchdog de processos MT5
         self.mt5_monitor.start()
         logger.info("MT5ProcessMonitor (watchdog) iniciado.")
-        
+
         # Iniciar Bridge (async task)
-        self.bridge_task = asyncio.create_task(self.zmq_bridge.start(self.broker_manager.get_brokers()))
+        await self.zmq_bridge.start(self.broker_manager.get_brokers())
+
+        # Registrar callbacks Master + Slaves HB no copy_engine
+        self.copy_engine.register_callbacks()
+
+        # Manter bridge rodando
+        self.bridge_task = asyncio.create_task(
+            asyncio.sleep(0)  # placeholder — loops já criados dentro do zmq_bridge
+        )
     
     async def cleanup(self):
         """Limpa recursos antes de encerrar."""
