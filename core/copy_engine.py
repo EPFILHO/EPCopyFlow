@@ -134,10 +134,13 @@ class CopyEngine:
             payload = json.dumps({
                 'protocol_version': '1.0',
                 'event_type':       'OPEN',
+                'slave_id':         slave_key,
+                'master_id':        key,
                 'master_ticket':    master_ticket,
                 'symbol':           symbol,
                 'order_type':       order_type,
                 'volume':           volume_slave,
+                'price':            0.0,
                 'sl':               sl,
                 'tp':               tp,
                 'comment':          comment,
@@ -163,6 +166,8 @@ class CopyEngine:
             payload = json.dumps({
                 'protocol_version': '1.0',
                 'event_type':       'CLOSE',
+                'slave_id':         slave_key,
+                'master_id':        key,
                 'master_ticket':    master_ticket,
                 'ticket':           slave_ticket,
             }, separators=(',', ':'))
@@ -193,6 +198,8 @@ class CopyEngine:
             payload = json.dumps({
                 'protocol_version': '1.0',
                 'event_type':       'PARTIAL_CLOSE',
+                'slave_id':         slave_key,
+                'master_id':        key,
                 'master_ticket':    master_ticket,
                 'ticket':           slave_ticket,
                 'volume_after':     volume_slave_after,
@@ -221,6 +228,8 @@ class CopyEngine:
             payload = json.dumps({
                 'protocol_version': '1.0',
                 'event_type':       'MODIFY_SLTP',
+                'slave_id':         slave_key,
+                'master_id':        key,
                 'master_ticket':    master_ticket,
                 'ticket':           slave_ticket,
                 'sl':               sl,
