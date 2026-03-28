@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //| EPCopyFlow_SlaveEvents.mqh                                       |
-//| Structs de comandos recebidos pelo EA Slave                      |
+//| Structs de comandos recebidos pelo EA Slave.                     |
 //| EPCopyFlow - EPFilho                                             |
 //+------------------------------------------------------------------+
 #ifndef EPCOPYFLOW_SLAVEEVENTS_MQH
