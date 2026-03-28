@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //| EPCopyFlow_MasterEvents.mqh                                      |
-//| Structs de contexto e eventos do EA Master                       |
+//| Structs de contexto e eventos do EA Master!                      |
 //| EPCopyFlow - EPFilho                                             |
 //+------------------------------------------------------------------+
 #ifndef EPCOPYFLOW_MASTEREVENTS_MQH
