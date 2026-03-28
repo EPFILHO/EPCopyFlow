@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //| EPCopyFlow_SlaveJson.mqh                                         |
-//| Faz parse do JSON recebido e preenche structs de comando         |
+//| Faz parse do JSON recebido e preenche structs de comando  .      |
 //| EPCopyFlow - EPFilho                                             |
 //+------------------------------------------------------------------+
 #ifndef EPCOPYFLOW_SLAVEJSON_MQH
