@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                        EPCopyFlow_Slave.mq5      |
 //|                                         EP Filho © 2026          |
-//|                    https://github.com/EPFILHO/EPCopyFlow          |
+//|                    https://github.com/EPFILHO/EPCopyFlow         |
 //+------------------------------------------------------------------+
 #property copyright "EP Filho © 2026"
 #property link      "https://github.com/EPFILHO/EPCopyFlow"
