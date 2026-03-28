@@ -8,7 +8,7 @@
 
 #include "EPCopyFlow_MasterEvents.mqh"
 
-//--- Helpers de formatacao
+//--- Helpers de formatacao!
 string _MJ_D(double v)   { return DoubleToString(v, 8); }
 string _MJ_I(long v)     { return IntegerToString(v); }
 string _MJ_S(string v)   { return "\"" + v + "\""; }
