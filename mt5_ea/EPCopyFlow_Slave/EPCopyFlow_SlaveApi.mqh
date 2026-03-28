@@ -12,7 +12,7 @@
 CTrade g_trade;
 
 //+------------------------------------------------------------------+
-//| Helper: reconstroi preco absoluto a partir de pontos             |
+//| Helper: reconstroi preco absoluto a partir de pontos.            |
 //| open_price : preco de abertura real do Slave                     |
 //| points     : distancia em pontos (0 = sem nivel)                 |
 //| is_buy     : true = BUY, false = SELL                            |
