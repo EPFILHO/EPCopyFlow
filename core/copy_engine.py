@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class CopyEngine:
     """
-    Coração do EPCopyFlow.
+    Coração do EPCopyFlow!
     Recebe eventos do EA Master, calcula volumes proporcionais
     e envia comandos para os EA Slaves via ZmqBridge.
 
