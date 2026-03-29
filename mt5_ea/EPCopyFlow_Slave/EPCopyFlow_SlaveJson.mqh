@@ -1,129 +1,191 @@
 //+------------------------------------------------------------------+
-//| EPCopyFlow_SlaveJson.mqh                                         |
-//| Faz parse do JSON recebido e preenche structs de comando  .      |
-//| EPCopyFlow - EPFilho                                             |
+//|                                     EPCopyFlow_SlaveJson.mqh   |
+//|                                         EP Filho © 2026         |
+//|                          https://github.com/EPFILHO/EPCopyFlow  |
 //+------------------------------------------------------------------+
-#ifndef EPCOPYFLOW_SLAVEJSON_MQH
-#define EPCOPYFLOW_SLAVEJSON_MQH
+#ifndef EPCOPYFLOW_SLAVE_JSON_MQH
+#define EPCOPYFLOW_SLAVE_JSON_MQH
 
 #include "EPCopyFlow_SlaveEvents.mqh"
+#include "EPCopyFlow_SlaveContext.mqh"
 
-//--- Helpers de extracao de campos do JSON (parser minimalista)
-
-// Extrai string entre aspas para o campo dado: "key":"value"
-string Json_ExtractString(const string &json, const string key)
-{
+//+------------------------------------------------------------------+
+//| Helpers de parsing                                               |
+//+------------------------------------------------------------------+
+string Json_ExtractString(const string json, const string key)
+  {
    string search = "\"" + key + "\":\"";
-   int    pos    = StringFind(json, search);
-   if(pos < 0) return "";
-   pos += StringLen(search);
-   int end = StringFind(json, "\"", pos);
+   int start = StringFind(json, search);
+   if(start < 0) return "";
+   start += StringLen(search);
+   int end = StringFind(json, "\"", start);
    if(end < 0) return "";
-   return StringSubstr(json, pos, end - pos);
-}
+   return StringSubstr(json, start, end - start);
+  }
 
-// Extrai valor numerico inteiro para o campo dado: "key":12345
-long Json_ExtractLong(const string &json, const string key)
-{
+double Json_ExtractDouble(const string json, const string key)
+  {
    string search = "\"" + key + "\":";
-   int    pos    = StringFind(json, search);
-   if(pos < 0) return 0;
-   pos += StringLen(search);
-   // pula espacos eventuais
-   while(pos < StringLen(json) && StringSubstr(json, pos, 1) == " ") pos++;
-   // le ate encontrar delimitador
-   string num = "";
-   for(int i = pos; i < StringLen(json); i++)
-   {
-      string ch = StringSubstr(json, i, 1);
-      if(ch == "," || ch == "}" || ch == "]" || ch == " ") break;
-      num += ch;
-   }
-   return (long)StringToInteger(num);
-}
+   int start = StringFind(json, search);
+   if(start < 0) return 0.0;
+   start += StringLen(search);
+   int end1 = StringFind(json, ",", start);
+   int end2 = StringFind(json, "}", start);
+   int end  = (end1 < 0) ? end2 : (end2 < 0) ? end1 : MathMin(end1, end2);
+   if(end < 0) return 0.0;
+   return StringToDouble(StringSubstr(json, start, end - start));
+  }
 
-// Extrai valor numerico double para o campo dado: "key":1.23456
-double Json_ExtractDouble(const string &json, const string key)
-{
+long Json_ExtractLong(const string json, const string key)
+  {
    string search = "\"" + key + "\":";
-   int    pos    = StringFind(json, search);
-   if(pos < 0) return 0.0;
-   pos += StringLen(search);
-   while(pos < StringLen(json) && StringSubstr(json, pos, 1) == " ") pos++;
-   string num = "";
-   for(int i = pos; i < StringLen(json); i++)
-   {
-      string ch = StringSubstr(json, i, 1);
-      if(ch == "," || ch == "}" || ch == "]" || ch == " ") break;
-      num += ch;
-   }
-   return StringToDouble(num);
-}
-
-// Extrai tipo do evento: "type":"OPEN"
-string Json_ExtractType(const string &json)
-{
-   return Json_ExtractString(json, "type");
-}
+   int start = StringFind(json, search);
+   if(start < 0) return 0;
+   start += StringLen(search);
+   int end1 = StringFind(json, ",", start);
+   int end2 = StringFind(json, "}", start);
+   int end  = (end1 < 0) ? end2 : (end2 < 0) ? end1 : MathMin(end1, end2);
+   if(end < 0) return 0;
+   return StringToInteger(StringSubstr(json, start, end - start));
+  }
 
 //+------------------------------------------------------------------+
-//| Parse de comando OPEN                                            |
+//| Identifica o tipo de comando no JSON recebido                    |
 //+------------------------------------------------------------------+
-bool Slave_ParseOpen(const string &json, SlaveOpenCmd &cmd)
-{
-   cmd.master_ticket = (ulong)Json_ExtractLong(json, "master_ticket");
-   cmd.symbol        = Json_ExtractString(json, "symbol");
-   cmd.order_type    = (ENUM_ORDER_TYPE)(int)Json_ExtractLong(json, "order_type");
-   cmd.volume        = Json_ExtractDouble(json, "volume");
-   cmd.price         = Json_ExtractDouble(json, "open_price");
-   cmd.sl_points     = Json_ExtractLong(json, "sl_points");   // <-- pontos
-   cmd.tp_points     = Json_ExtractLong(json, "tp_points");   // <-- pontos
-   cmd.magic         = Json_ExtractLong(json, "magic");
-   cmd.comment       = Json_ExtractString(json, "comment");
+ENUM_SLAVE_CMD Json_GetCommandType(const string json)
+  {
+   string event_type = Json_ExtractString(json, "event_type");
 
-   // validacao minima
-   if(cmd.symbol == "" || cmd.volume <= 0.0) return false;
+   if(event_type == "OPEN")          return SLAVE_CMD_OPEN;
+   if(event_type == "CLOSE")         return SLAVE_CMD_CLOSE;
+   if(event_type == "PARTIAL_CLOSE") return SLAVE_CMD_PARTIAL_CLOSE;
+   if(event_type == "MODIFY_SLTP")   return SLAVE_CMD_MODIFY_SLTP;
+   if(event_type == "HEARTBEAT")     return SLAVE_CMD_HEARTBEAT;
+
+   PrintFormat("EPCopyFlow_Slave | JSON: event_type desconhecido → '%s'", event_type);
+   return SLAVE_CMD_UNKNOWN;
+  }
+
+//+------------------------------------------------------------------+
+//| Deserializa comando OPEN                                         |
+//+------------------------------------------------------------------+
+bool Json_ParseOpen(const string json, SlaveOpenCmd &cmd)
+  {
+   cmd.protocol_version = Json_ExtractString(json, "protocol_version");
+   cmd.slave_id         = Json_ExtractString(json, "slave_id");
+   cmd.master_id        = Json_ExtractString(json, "master_id");
+   cmd.master_ticket    = Json_ExtractLong  (json, "master_ticket");
+   cmd.symbol           = Json_ExtractString(json, "symbol");
+   cmd.volume           = Json_ExtractDouble(json, "volume");
+   cmd.price            = Json_ExtractDouble(json, "price");
+   cmd.sl_points        = Json_ExtractLong  (json, "sl_points");  // << ALTERADO
+   cmd.tp_points        = Json_ExtractLong  (json, "tp_points");  // << ALTERADO
+   cmd.comment          = Json_ExtractString(json, "comment");
+
+   string order_str = Json_ExtractString(json, "order_type");
+   cmd.order_type = (order_str == "BUY") ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+
+   if(cmd.slave_id == "" || cmd.symbol == "" || cmd.volume <= 0 || cmd.master_ticket == 0)
+     {
+      Print("EPCopyFlow_Slave | JSON OPEN inválido: campos obrigatórios ausentes.");
+      return false;
+     }
    return true;
-}
+  }
 
 //+------------------------------------------------------------------+
-//| Parse de comando MODIFY_SLTP                                     |
+//| Deserializa comando CLOSE                                        |
 //+------------------------------------------------------------------+
-bool Slave_ParseModify(const string &json, SlaveModifyCmd &cmd)
-{
-   cmd.master_ticket = (ulong)Json_ExtractLong(json, "master_ticket");
-   cmd.symbol        = Json_ExtractString(json, "symbol");
-   cmd.sl_points     = Json_ExtractLong(json, "sl_points");   // <-- pontos
-   cmd.tp_points     = Json_ExtractLong(json, "tp_points");   // <-- pontos
+bool Json_ParseClose(const string json, SlaveCloseCmd &cmd)
+  {
+   cmd.protocol_version = Json_ExtractString(json, "protocol_version");
+   cmd.slave_id         = Json_ExtractString(json, "slave_id");
+   cmd.master_id        = Json_ExtractString(json, "master_id");
+   cmd.master_ticket    = Json_ExtractLong  (json, "master_ticket");
+   cmd.symbol           = Json_ExtractString(json, "symbol");
 
-   if(cmd.master_ticket == 0) return false;
+   if(cmd.slave_id == "" || cmd.master_ticket == 0)
+     {
+      Print("EPCopyFlow_Slave | JSON CLOSE inválido: campos obrigatórios ausentes.");
+      return false;
+     }
    return true;
-}
+  }
 
 //+------------------------------------------------------------------+
-//| Parse de comando CLOSE                                           |
+//| Deserializa comando PARTIAL_CLOSE                                |
 //+------------------------------------------------------------------+
-bool Slave_ParseClose(const string &json, SlaveCloseCmd &cmd)
-{
-   cmd.master_ticket = (ulong)Json_ExtractLong(json, "master_ticket");
-   cmd.symbol        = Json_ExtractString(json, "symbol");
-   cmd.volume_pct    = Json_ExtractDouble(json, "volume_pct");
-   cmd.reason        = Json_ExtractString(json, "reason");
+bool Json_ParsePartialClose(const string json, SlavePartialCloseCmd &cmd)
+  {
+   cmd.protocol_version = Json_ExtractString(json, "protocol_version");
+   cmd.slave_id         = Json_ExtractString(json, "slave_id");
+   cmd.master_id        = Json_ExtractString(json, "master_id");
+   cmd.master_ticket    = Json_ExtractLong  (json, "master_ticket");
+   cmd.symbol           = Json_ExtractString(json, "symbol");
+   cmd.close_volume     = Json_ExtractDouble(json, "close_volume");
 
-   if(cmd.master_ticket == 0) return false;
-   if(cmd.volume_pct <= 0.0) cmd.volume_pct = 1.0; // default: fecha tudo
+   if(cmd.slave_id == "" || cmd.master_ticket == 0 || cmd.close_volume <= 0)
+     {
+      Print("EPCopyFlow_Slave | JSON PARTIAL_CLOSE inválido: campos obrigatórios ausentes.");
+      return false;
+     }
    return true;
-}
+  }
 
 //+------------------------------------------------------------------+
-//| Parse de HEARTBEAT                                               |
+//| Deserializa comando MODIFY_SLTP                                  |
 //+------------------------------------------------------------------+
-bool Slave_ParseHeartbeat(const string &json, SlaveHeartbeatCmd &cmd)
-{
-   string ts = Json_ExtractString(json, "timestamp");
-   cmd.timestamp = (datetime)StringToTime(ts);
+bool Json_ParseModify(const string json, SlaveModifyCmd &cmd)
+  {
+   cmd.protocol_version = Json_ExtractString(json, "protocol_version");
+   cmd.slave_id         = Json_ExtractString(json, "slave_id");
+   cmd.master_id        = Json_ExtractString(json, "master_id");
+   cmd.master_ticket    = Json_ExtractLong  (json, "master_ticket");
+   cmd.symbol           = Json_ExtractString(json, "symbol");
+   cmd.sl_points        = Json_ExtractLong  (json, "sl_points");  // << ALTERADO
+   cmd.tp_points        = Json_ExtractLong  (json, "tp_points");  // << ALTERADO
+
+   if(cmd.slave_id == "" || cmd.master_ticket == 0)
+     {
+      Print("EPCopyFlow_Slave | JSON MODIFY inválido: campos obrigatórios ausentes.");
+      return false;
+     }
    return true;
-}
+  }
 
-#endif // EPCOPYFLOW_SLAVEJSON_MQH
 //+------------------------------------------------------------------+
+//| Serializa SlaveHeartbeat para JSON                               |
+//+------------------------------------------------------------------+
+string Json_BuildHeartbeat(const SlaveHeartbeat &hb)
+  {
+   string json = "{";
+   json += "\"protocol_version\":\"" + hb.protocol_version + "\",";
+   json += "\"event_type\":\"HEARTBEAT\",";
+   json += "\"slave_id\":\""         + hb.slave_id         + "\",";
+   json += "\"master_id\":\""        + hb.master_id        + "\",";
+   json += "\"timestamp\":"          + IntegerToString((long)hb.timestamp) + ",";
+   json += "\"positions_count\":"    + IntegerToString(hb.positions_count) + ",";
+   json += "\"positions\":[";
+
+   for(int i = 0; i < hb.positions_count; i++)
+     {
+      if(i > 0) json += ",";
+      json += "{";
+      json += "\"ticket\":"        + IntegerToString(hb.positions[i].ticket)          + ",";
+      json += "\"symbol\":\""      + hb.positions[i].symbol                           + "\",";
+      json += "\"type\":"          + IntegerToString((int)hb.positions[i].type)       + ",";
+      json += "\"volume\":"        + DoubleToString(hb.positions[i].volume, 2)        + ",";
+      json += "\"open_price\":"    + DoubleToString(hb.positions[i].open_price, 5)    + ",";
+      json += "\"sl\":"            + DoubleToString(hb.positions[i].sl, 5)            + ",";
+      json += "\"tp\":"            + DoubleToString(hb.positions[i].tp, 5)            + ",";
+      json += "\"profit\":"        + DoubleToString(hb.positions[i].profit, 2)        + ",";
+      json += "\"master_ticket\":" + IntegerToString(hb.positions[i].master_ticket)   + ",";
+      json += "\"comment\":\""     + hb.positions[i].comment                          + "\"";
+      json += "}";
+     }
+
+   json += "]}";
+   return json;
+  }
+
+#endif // EPCOPYFLOW_SLAVE_JSON_MQH
