@@ -1,4 +1,4 @@
-//+------------------------------------------------------------------+
+﻿//+------------------------------------------------------------------+
 //|                                     EPCopyFlow_SlaveJson.mqh   |
 //|                                         EP Filho © 2026         |
 //|                          https://github.com/EPFILHO/EPCopyFlow  |
@@ -78,8 +78,8 @@ bool Json_ParseOpen(const string json, SlaveOpenCmd &cmd)
    cmd.symbol           = Json_ExtractString(json, "symbol");
    cmd.volume           = Json_ExtractDouble(json, "volume");
    cmd.price            = Json_ExtractDouble(json, "price");
-   cmd.sl_points        = Json_ExtractLong  (json, "sl_points");  // << ALTERADO
-   cmd.tp_points        = Json_ExtractLong  (json, "tp_points");  // << ALTERADO
+   cmd.sl               = Json_ExtractDouble(json, "sl");
+   cmd.tp               = Json_ExtractDouble(json, "tp");
    cmd.comment          = Json_ExtractString(json, "comment");
 
    string order_str = Json_ExtractString(json, "order_type");
@@ -142,8 +142,8 @@ bool Json_ParseModify(const string json, SlaveModifyCmd &cmd)
    cmd.master_id        = Json_ExtractString(json, "master_id");
    cmd.master_ticket    = Json_ExtractLong  (json, "master_ticket");
    cmd.symbol           = Json_ExtractString(json, "symbol");
-   cmd.sl_points        = Json_ExtractLong  (json, "sl_points");  // << ALTERADO
-   cmd.tp_points        = Json_ExtractLong  (json, "tp_points");  // << ALTERADO
+   cmd.sl               = Json_ExtractDouble(json, "sl");
+   cmd.tp               = Json_ExtractDouble(json, "tp");
 
    if(cmd.slave_id == "" || cmd.master_ticket == 0)
      {
