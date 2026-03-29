@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
-//|                                     EPCopyFlow_SlaveEvents.mqh  |
-//|                                         EP Filho © 2026         |
-//|                          https://github.com/EPFILHO/EPCopyFlow  |
+//| EPCopyFlow_SlaveEvents.mqh                                       |
+//| Structs de comandos recebidos pelo EA Slave.                     |
+//| EPCopyFlow - EPFilho                                             |
 //+------------------------------------------------------------------+
 #ifndef EPCOPYFLOW_SLAVE_EVENTS_MQH
 #define EPCOPYFLOW_SLAVE_EVENTS_MQH
