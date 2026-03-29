@@ -31,14 +31,14 @@ struct SlaveOpenCmd
    ENUM_ORDER_TYPE   order_type;
    double            volume;
    double            price;
-   long              sl_points;     // era: double sl
-   long              tp_points;     // era: double tp
+   double            sl;
+   double            tp;
    string            comment;
    string            protocol_version;
   };
 
 //+------------------------------------------------------------------+
-//| Comando CLOSE                                                    |
+//| Comando CLOSE                                                     |
 //+------------------------------------------------------------------+
 struct SlaveCloseCmd
   {
@@ -71,8 +71,8 @@ struct SlaveModifyCmd
    string            master_id;
    long              master_ticket;
    string            symbol;
-   long              sl_points;     // era: double sl
-   long              tp_points;     // era: double tp
+   double            sl;
+   double            tp;
    string            protocol_version;
   };
 
